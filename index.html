@@ -1,33 +1,323 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="id">
-  <head>
-    <meta charset="UTF-8" />
-    <title>Patunganku - Modul 2 SDLC</title>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PatunganKu - Senior Project Kelompok 12</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
     <style>
-      body {
-        font-family: sans-serif;
-        margin: 40px;
-        background: #f4f6f8;
-      }
-      .card {
-        background: white;
-        padding: 24px;
-        border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-      }
-      h1 {
-        color: #1e3a8a;
-      }
+        :root {
+            --primary: #1e40af; /* Biru Tua */
+            --secondary: #3b82f6; /* Biru Muda */
+            --bg-color: #f8fafc;
+            --card-bg: #ffffff;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            line-height: 1.6;
+            margin: 0;
+            padding: 0;
+        }
+
+        header {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+            padding: 60px 20px;
+            text-align: center;
+        }
+
+            header h1 {
+                margin: 0;
+                font-size: 2.5rem;
+            }
+
+            header p {
+                margin: 10px 0 0;
+                font-size: 1.1rem;
+                opacity: 0.9;
+            }
+
+        .container {
+            max-width: 1000px;
+            margin: -30px auto 40px;
+            padding: 0 20px;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            padding: 30px;
+            margin-bottom: 30px;
+        }
+
+            .card h2 {
+                color: var(--primary);
+                border-bottom: 2px solid #e2e8f0;
+                padding-bottom: 10px;
+                margin-top: 0;
+            }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+
+        th, td {
+            border: 1px solid #e2e8f0;
+            padding: 12px;
+            text-align: left;
+        }
+
+        th {
+            background-color: #f1f5f9;
+            color: var(--text-main);
+        }
+
+        .team-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .team-member {
+            background: #f8fafc;
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid var(--secondary);
+        }
+
+            .team-member h3 {
+                margin: 0 0 5px 0;
+                font-size: 1.1rem;
+            }
+
+            .team-member p {
+                margin: 0;
+                color: var(--text-muted);
+                font-size: 0.9rem;
+            }
+
+        .img-placeholder {
+            width: 100%;
+            max-width: 800px;
+            height: auto;
+            background: #e2e8f0;
+            border: 2px dashed #cbd5e1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-muted);
+            margin: 20px auto;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+        }
+
+            .img-placeholder img {
+                max-width: 100%;
+                border-radius: 8px;
+            }
+
+        ul, ol {
+            padding-left: 20px;
+        }
+
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
     </style>
-  </head>
-  <body>
-    <div class="card">
-      <h1>Patunganku - Senior Project Kelompok 12</h1>
-      <p><strong>Metodologi SDLC:</strong> Agile Scrumban Model</p>
-      <p>
-        Platform pencatat dan pembagi pengeluaran bersama dengan verifikasi
-        struk AI dan penyimpanan cloud.
-      </p>
+</head>
+<body>
+
+    <header>
+        <h1>PatunganKu</h1>
+        <p>Platform Pencatat & Pembagi Pengeluaran Bersama dengan AI Receipt Verifier</p>
+        <p><small>Senior Project (Jaringan Komputer, Komputasi Awan, dan AI) - Modul 1 & 2</small></p>
+    </header>
+
+    <div class="container">
+
+        <!-- TIM PENGEMBANG -->
+        <div class="card">
+            <h2>Tim Pengembang - Kelompok 12</h2>
+            <p>Laboratorium Jaringan Komputer dan Aplikasi Terdistribusi</p>
+            <div class="team-grid">
+                <div class="team-member">
+                    <h3>Aqidatul Izzah</h3>
+                    <p>NIM: 24/533730/TK/59137</p>
+                    <p><strong>Peran:</strong> UI/UX, Software Engineer</p>
+                </div>
+                <div class="team-member">
+                    <h3>Bintang Khalifa Hadianto</h3>
+                    <p>NIM: 24/534951/TK/59312</p>
+                    <p><strong>Peran:</strong> AI Engineer, Software Engineer</p>
+                </div>
+                <div class="team-member">
+                    <h3>Rasyid Rayhan Novandy</h3>
+                    <p>NIM: 24/545518/TK/60688</p>
+                    <p><strong>Peran:</strong> Cloud Engineer, Software Engineer</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- LATAR BELAKANG & MASALAH -->
+        <div class="card">
+            <h2>Latar Belakang & Permasalahan</h2>
+            <p>Aktivitas patungan (split bill) merupakan hal yang sangat umum terjadi dalam kehidupan sehari-hari, baik saat makan bersama, kos, traveling, hingga KKN. Sering kali pembagian biaya menjadi topik sensitif. Pembagian yang tidak adil atau ketidakjelasan pencatatan dapat mengganggu keharmonisan hubungan.</p>
+            <p>Permasalahan semakin kompleks pada pengeluaran <strong>berkelanjutan dan berulang</strong>. Pencatatan manual rentan menyebabkan kesalahan hitung, lupa, dan sulit dilacak. Selain itu, masalah kritis lainnya adalah <strong>transparansi dan validasi bukti pembayaran (struk belanja)</strong>. Sering terjadi klaim tidak jelas, foto non-struk, struk rekayasa, hingga human error. Memverifikasi struk fisik secara manual menyita waktu dan memicu rasa curiga.</p>
+            <h3>Rumusan Masalah</h3>
+            <ul>
+                <li>Bagaimana merancang arsitektur aplikasi web berbasis sistem autentikasi pengguna dan grup unik?</li>
+                <li>Bagaimana mengimplementasikan model Computer Vision (YOLO) untuk memverifikasi keaslian foto struk belanja?</li>
+                <li>Bagaimana menyusun algoritma Split Bill Ledger untuk kalkulasi saldo bersih (net balance) pada skenario berkelanjutan?</li>
+                <li>Bagaimana mengelola histori transaksi pada cloud database (Microsoft Azure)?</li>
+            </ul>
+        </div>
+
+        <!-- SOLUSI & FITUR -->
+        <div class="card">
+            <h2>Ide Solusi & Fitur Utama</h2>
+            <p>Mengembangkan <strong>PatunganKu</strong>, aplikasi web pencatat dan pembagi pengeluaran bersama yang dilengkapi verifikasi bukti otomatis menggunakan <strong>AI YOLO</strong>, arsitektur grup, dan penyimpanan pada infrastruktur <strong>Azure Cloud</strong>.</p>
+            <table>
+                <tr>
+                    <th>Fitur</th>
+                    <th>Keterangan</th>
+                </tr>
+                <tr>
+                    <td><strong>Autentikasi & Grup</strong></td>
+                    <td>Registrasi via No HP / CodeUser. Pembuatan grup unik untuk lembar kerja keuangan bersama.</td>
+                </tr>
+                <tr>
+                    <td><strong>AI Receipt Verifier</strong></td>
+                    <td>Pemindaian struk menggunakan <strong>AI YOLOv8</strong> untuk memverifikasi keaslian foto sebelum nominal dijumlahkan.</td>
+                </tr>
+                <tr>
+                    <td><strong>Smart Split Ledger</strong></td>
+                    <td>Algoritma penghitung saldo bersih (net balance) otomatis secara real-time dan rekomendasi pelunasan terpendek.</td>
+                </tr>
+                <tr>
+                    <td><strong>Cloud History (Azure)</strong></td>
+                    <td>Riwayat transaksi, status pelunasan, dan foto struk disimpan terstruktur di Azure Database & Blob Storage.</td>
+                </tr>
+            </table>
+        </div>
+
+        <!-- METODOLOGI & FR -->
+        <div class="card">
+            <h2>SDLC & Functional Requirements</h2>
+            <p>
+                <strong>Metodologi: Agile Scrumban Model</strong><br>
+                Digunakan karena membutuhkan sprint/timebox ala Scrum (sesuai jadwal praktikum), namun backlog dikelola dengan flow Kanban + WIP limit agar lebih fleksibel terhadap riset seperti akurasi AI.
+            </p>
+
+            <h3>Functional Requirements (FR)</h3>
+            <table>
+                <tr><th>Kode</th><th>Deskripsi Kebutuhan</th></tr>
+                <tr><td>FR 1</td><td>Sistem dapat melakukan registrasi & login via email/No HP</td></tr>
+                <tr><td>FR 2</td><td>Sistem dapat membuat grup baru dan menghasilkan Kode Grup unik</td></tr>
+                <tr><td>FR 3</td><td>Sistem dapat menerima unggahan foto struk dari pengguna</td></tr>
+                <tr><td>FR 4</td><td>Sistem dapat memverifikasi keaslian struk menggunakan model AI</td></tr>
+                <tr><td>FR 5</td><td>Sistem dapat menghitung dan menyimpan pembagian tanggungan tiap transaksi</td></tr>
+                <tr><td>FR 6</td><td>Sistem dapat menghitung saldo bersih (net balance) tiap anggota real-time</td></tr>
+                <tr><td>FR 7</td><td>Sistem memproses konfirmasi pembayaran utang (bukti transfer & ACC penerima)</td></tr>
+                <tr><td>FR 8</td><td>Sistem dapat mencatat status pelunasan dan histori transaksi</td></tr>
+                <tr><td>FR 9</td><td>Sistem menyimpan data di Azure Blob Storage & Database</td></tr>
+            </table>
+        </div>
+
+        <!-- KOMPETITOR -->
+        <div class="card">
+            <h2>Analisis Kompetitor</h2>
+            <table>
+                <tr>
+                    <th>Kompetitor</th>
+                    <th>Kelebihan</th>
+                    <th>Kekurangan & Celah</th>
+                </tr>
+                <tr>
+                    <td><strong>Splitwise</strong><br><small>Direct Competitor</small></td>
+                    <td>UI/UX populer global, algoritma debt simplification, fitur lengkap.</td>
+                    <td>Scan struk (OCR) hanya di versi berbayar, <strong>tidak ada AI validasi struk asli/palsu</strong>, ada limit versi gratis.</td>
+                </tr>
+                <tr>
+                    <td><strong>Tricount</strong><br><small>Direct Competitor</small></td>
+                    <td>Sangat ringan, minimalis, bisa offline, grup instan tanpa akun rumit.</td>
+                    <td><strong>Tidak ada scan struk/AI</strong>, tidak ada push notification, tidak ada analitik prediksi.</td>
+                </tr>
+                <tr>
+                    <td><strong>Jenius (Split Bill)</strong><br><small>Indirect Competitor</small></td>
+                    <td>Eksekusi transfer instan, tanpa biaya admin sesama Jenius.</td>
+                    <td>Eksklusif harus punya rekening Jenius, <strong>tidak ada validasi struk AI</strong>, hanya untuk 1 kali transaksi (tidak berkelanjutan).</td>
+                </tr>
+            </table>
+        </div>
+
+        <!-- DIAGRAM & WIREFRAME (GAMBAR) -->
+        <div class="card">
+            <h2>Diagram & Wireframe Sistem</h2>
+            <p>Berikut adalah rancangan model bisnis, sistem, dan antarmuka aplikasi kami:</p>
+
+            <h3>1. Lean Canvas Model</h3>
+            <div class="img-placeholder">
+                <img src="assets/images/lean-canvas.jpg" alt="Lean Canvas Model" onerror="this.style.display='none'; this.parentNode.innerHTML='<em>Gambar Lean Canvas (Silakan unggah file foto)</em>'">
+            </div>
+
+            <h3>2. Use Case Diagram</h3>
+            <div class="img-placeholder">
+                <img src="assets/images/use-case.jpg" alt="Use Case Diagram" onerror="this.style.display='none'; this.parentNode.innerHTML='<em>Gambar Use Case Diagram (Silakan unggah file foto)</em>'">
+            </div>
+
+            <h3>3. Entity Relationship Diagram (ERD)</h3>
+            <div class="img-placeholder">
+                <img src="assets/images/erd.jpg" alt="ERD" onerror="this.style.display='none'; this.parentNode.innerHTML='<em>Gambar ERD (Silakan unggah file foto)</em>'">
+            </div>
+
+            <h3>4. Low-fidelity Wireframe</h3>
+            <div class="img-placeholder">
+                <img src="assets/images/wireframe1.jpg" alt="Wireframe" onerror="this.style.display='none'; this.parentNode.innerHTML='<em>Gambar Wireframe (Silakan unggah file foto)</em>'">
+                <img src="assets/images/wireframe2.jpg" alt="Wireframe" onerror="this.style.display='none'; this.parentNode.innerHTML='<em>Gambar Wireframe (Silakan unggah file foto)</em>'">
+                <img src="assets/images/wireframe3.jpg" alt="Wireframe" onerror="this.style.display='none'; this.parentNode.innerHTML='<em>Gambar Wireframe (Silakan unggah file foto)</em>'">
+            </div>
+        </div>
+
+        <!-- GANTT CHART -->
+        <div class="card">
+            <h2>Gantt Chart (Timeline Proyek)</h2>
+            <table>
+                <tr>
+                    <th>Kegiatan</th>
+                    <th>Pertemuan</th>
+                </tr>
+                <tr><td>Brainstorming, Perumusan Masalah, dan Membuat LMC</td><td>1, 2</td></tr>
+                <tr><td>Setup Repo & Git Workflow</td><td>2, 3</td></tr>
+                <tr><td>Perancangan Desain UI/UX & Lo-Fi dan Hi-Fi Wireframe</td><td>2, 3, 4</td></tr>
+                <tr><td>Pengumpulan Dataset Struk & Anotasi Label Struk</td><td>3, 4, 5</td></tr>
+                <tr><td>Setup Cloud Infrastructure (Azure Blob & DB)</td><td>4, 5, 6</td></tr>
+                <tr><td>Pengembangan Backend API & Algoritma Ledger</td><td>5, 6, 7, 8</td></tr>
+                <tr><td>Training & Fine-Tuning AI Model (YOLOv8 Receipt)</td><td>5, 6, 7, 8</td></tr>
+                <tr><td>Pengembangan Frontend WebApp Mobile</td><td>6, 7, 8, 9</td></tr>
+                <tr><td>Integrasi AI YOLO & Cloud Storage ke Frontend</td><td>8, 9, 10</td></tr>
+                <tr><td>System Testing, Security Audit, & Bug Fixing</td><td>10, 11</td></tr>
+                <tr><td>Deployment Production & Final Delivery</td><td>11, 12</td></tr>
+            </table>
+        </div>
+
     </div>
-  </body>
+
+    <div class="footer">
+        &copy; 2026 PatunganKu - Kelompok 12. Di-deploy menggunakan GitHub Pages & Actions.
+    </div>
+
+</body>
 </html>
