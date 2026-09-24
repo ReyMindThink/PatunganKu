@@ -1,8 +1,8 @@
 # PatunganKu
 
-Aplikasi web (PWA, mobile-first) untuk mencatat, membagi, dan memverifikasi pengeluaran bersama dalam grup (kos, KKN, open trip). Foto struk diverifikasi oleh AI vision sebelum nominalnya masuk ke pembagian tagihan, dan riwayat disimpan di Azure.
+Aplikasi untuk mencatat, membagi, dan memverifikasi pengeluaran bersama dalam grup (kos, KKN, open trip). Foto struk diverifikasi oleh AI vision sebelum nominalnya masuk ke pembagian tagihan, dan riwayat disimpan di Azure.
 
-Senior Project (Jaringan Komputer, Komputasi Awan, dan AI), DTETI FT UGM, Kelompok 12.
+Senior Project, DTETI FT UGM, Kelompok 12.
 
 ## Anggota
 
@@ -33,5 +33,3 @@ PatunganKU/
 ├── site/            # halaman GitHub Pages kelompok
 ├── infra/           # konfigurasi infrastruktur (Docker, Azure)
 └── .github/         # workflow CI/CD, template issue dan PR
-
-
