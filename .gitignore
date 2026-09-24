@@ -1,1 +1,25 @@
+# Visual Studio
 .vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Build / test output
+dist/
+build/
+coverage/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

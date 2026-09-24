@@ -1,4 +1,4 @@
-name: Patunganku CI - Build and Test
+name: PatunganKu CI - Build and Test
 
 on:
   push:
@@ -6,43 +6,45 @@ on:
   pull_request:
     branches: ["main", "dev"]
 
-jobs:
-  test-and-build:
-    runs-on: ubuntu-latest
+permissions:
+  contents: read
 
-    strategy:
-      matrix:
-        node-version: [20.x]
+jobs:
+  backend:
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js Environment
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 24.x
 
       - name: Install Dependencies
         run: |
-          if [ -f package.json ]; then
+          if [ -f apps/backend/package.json ]; then
+            cd apps/backend
             npm ci || npm install
           else
-            echo "package.json belum ada, melewati langkah instalasi dependensi."
+            echo "apps/backend belum ada, melewati instalasi."
           fi
 
-      - name: Run Linting / Automated Tests
+      - name: Lint
         run: |
-          if [ -f package.json ]; then
+          if [ -f apps/backend/package.json ]; then
+            cd apps/backend
+            npm run lint --if-present
+          else
+            echo "Backend belum ada, melewati lint."
+          fi
+
+      - name: Test
+        run: |
+          if [ -f apps/backend/package.json ]; then
+            cd apps/backend
             npm test --if-present
           else
-            echo "package.json belum ada, melewati automated test."
-          fi
-
-      - name: Build Application
-        run: |
-          if [ -f package.json ]; then
-            npm run build --if-present
-          else
-            echo "package.json belum ada, verifikasi struktur repo sukses."
+            echo "Backend belum ada, melewati test."
           fi
