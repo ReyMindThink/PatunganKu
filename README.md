@@ -28,8 +28,26 @@ Senior Project, DTETI FT UGM, Kelompok 12.
 ```text
 PatunganKU/
 ├── apps/
-│   ├── backend/     # REST API
-│   └── frontend/    # aplikasi web
-├── site/            # halaman GitHub Pages kelompok
-├── infra/           # konfigurasi infrastruktur (Docker, Azure)
-└── .github/         # workflow CI/CD, template issue dan PR
+│   ├── backend/
+│   │   ├── prisma/          # schema database dan migration
+│   │   └── src/
+│   │       ├── config/      # env loader, konstanta
+│   │       ├── controllers/ # terima request, panggil service, bentuk response
+│   │       ├── routes/      # definisi endpoint per resource
+│   │       ├── middlewares/ # auth, error handler, dll.
+│   │       ├── services/    # logika bisnis (split bill, verifikasi struk, dll.)
+│   │       ├── validators/  # skema validasi input request
+│   │       ├── lib/         # integrasi eksternal: Prisma client, Azure Blob, AI vision
+│   │       └── utils/       # helper umum
+│   └── frontend/            # aplikasi web (belum dimulai)
+├── site/                    # halaman GitHub Pages kelompok
+├── infra/                   # konfigurasi infrastruktur (Docker, Azure)
+└── .github/                 # workflow CI/CD, template issue dan PR
+```
+
+### Panduan menambah kode backend
+
+- Endpoint baru → tambah file di `routes/`, logic-nya di `controllers/`
+- Aturan bisnis (hitung split, cek saldo, dll.) → taruh di `services/`, jangan di controller
+- Perlu koneksi ke layanan luar (database, storage, AI) → buat file baru di `lib/`
+- Validasi input form/body → skema di `validators/`, dipanggil sebelum controller
