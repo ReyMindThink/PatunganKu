@@ -23,3 +23,6 @@ coverage/
 # OS
 .DS_Store
 Thumbs.db
+
+# Prisma generated client (hasil generate, jangan di-commit)
+apps/backend/src/generated/
