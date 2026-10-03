@@ -34,3 +34,8 @@ export async function downloadReceipt(name) {
   const container = await getContainer();
   return container.getBlobClient(name).download();
 }
+
+export async function readReceiptBuffer(name) {
+  const container = await getContainer();
+  return container.getBlobClient(name).downloadToBuffer();
+}

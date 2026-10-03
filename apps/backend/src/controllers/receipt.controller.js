@@ -18,3 +18,12 @@ export async function upload(req, res) {
   );
   res.json({ transaction });
 }
+
+export async function verify(req, res) {
+  const result = await receiptService.verifyTransactionReceipt(
+    req.user.id,
+    parseId(req.params.groupId, "grup"),
+    parseId(req.params.transactionId, "transaksi"),
+  );
+  res.json(result);
+}

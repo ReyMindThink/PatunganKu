@@ -7,4 +7,6 @@ const router = Router({ mergeParams: true });
 
 router.post("/:transactionId/receipt", requireAuth, uploadReceiptFile, receiptController.upload);
 
+router.post("/:transactionId/receipt/verify", requireAuth, receiptController.verify);
+
 export default router;
