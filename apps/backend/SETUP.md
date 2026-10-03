@@ -121,3 +121,11 @@ Di Prisma 7, `PrismaClient` wajib diberi driver adapter. Gunakan instance dari
 Prisma Client belum di-generate ulang setelah schema berubah, sehingga model
 (misalnya `prisma.user`) belum ada. Jalankan `npx prisma generate`, lalu
 server restart otomatis.
+
+**`The API version ... is not supported by Azurite`**
+Container Azurite lama belum memakai flag `--skipApiVersionCheck`. Setelah `git pull`, buat ulang containernya (data tidak hilang):
+
+```bash
+cd infra
+docker compose up -d --force-recreate azurite
+```
