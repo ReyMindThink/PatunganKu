@@ -74,6 +74,20 @@ if (t) pm.collectionVariables.set("transactionId", t.id);`),
           { description: "Makan malam", amount: 50000, mode: "CUSTOM",
             splits: [{ userId: 1, amount: 30000 }, { userId: 2, amount: 20000 }] }),
         req("Daftar transaksi", "GET", "/api/groups/{{groupId}}/transactions"),
+        {
+          name: "Upload struk",
+          request: {
+            method: "POST",
+            header: [],
+            body: { mode: "formdata", formdata: [{ key: "receipt", type: "file", src: [] }] },
+            url: {
+              raw: "{{baseUrl}}/api/groups/{{groupId}}/transactions/{{transactionId}}/receipt",
+              host: ["{{baseUrl}}"],
+              path: ["api", "groups", "{{groupId}}", "transactions", "{{transactionId}}", "receipt"],
+            },
+          },
+        },
+        req("Verifikasi struk (Gemini)", "POST", "/api/groups/{{groupId}}/transactions/{{transactionId}}/receipt/verify"),
       ],
     },
     {

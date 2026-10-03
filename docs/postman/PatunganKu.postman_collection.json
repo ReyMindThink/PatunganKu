@@ -394,6 +394,60 @@
               ]
             }
           }
+        },
+        {
+          "name": "Upload struk",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "receipt",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/groups/{{groupId}}/transactions/{{transactionId}}/receipt",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "groups",
+                "{{groupId}}",
+                "transactions",
+                "{{transactionId}}",
+                "receipt"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Verifikasi struk (Gemini)",
+          "event": [],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/groups/{{groupId}}/transactions/{{transactionId}}/receipt/verify",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "groups",
+                "{{groupId}}",
+                "transactions",
+                "{{transactionId}}",
+                "receipt",
+                "verify"
+              ]
+            }
+          }
         }
       ]
     },
