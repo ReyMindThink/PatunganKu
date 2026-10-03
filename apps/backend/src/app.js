@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import { env } from "./config/env.js";
 import authRoutes from "./routes/auth.routes.js";
+import groupRoutes from "./routes/group.routes.js";
 import { errorHandler } from "./middlewares/errorHandler.js";
 
 const app = express();
@@ -14,6 +15,7 @@ app.get("/api/health", (req, res) => {
 });
 
 app.use("/api/auth", authRoutes);
+app.use("/api/groups", groupRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ error: "route-not-found" });
