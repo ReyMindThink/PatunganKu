@@ -129,3 +129,14 @@ Container Azurite lama belum memakai flag `--skipApiVersionCheck`. Setelah `git 
 cd infra
 docker compose up -d --force-recreate azurite
 ```
+
+## Verifikasi struk (Gemini)
+
+Fitur verifikasi struk memakai Gemini API. Setiap anggota tim memakai API key sendiri:
+
+1. Buat key di aistudio.google.com (menu API keys).
+2. Isi `GEMINI_API_KEY` di `apps/backend/.env`. **Jangan** menempel key ke chat, commit, atau koleksi Postman.
+3. `GEMINI_MODEL` sudah terisi di `.env.example`. Google bisa menutup model lama sewaktu-waktu (error `404 ... no longer available`). Kalau itu terjadi, ganti nilainya dengan model yang disarankan di pesan errornya.
+
+**`Gemini HTTP 429` atau endpoint verify membalas `502`**
+Kuota free tier habis atau model sedang sibuk. Status struk tidak berubah, jadi cukup ulangi beberapa saat lagi. Penyebab pastinya tercetak di terminal server dengan awalan `Verifikasi struk gagal:`.
