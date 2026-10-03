@@ -52,9 +52,17 @@ npx prisma migrate dev
 ```
 
 Migration yang sudah ada di `prisma/migrations/` akan diterapkan ke database
-lokal kamu. Prisma Client otomatis ter-generate ke `src/generated/prisma`.
-Folder ini tidak di-commit, jadi jalankan `npx prisma generate` jika folder
-tersebut belum ada.
+lokal kamu.
+
+Prisma Client **tidak** otomatis ter-generate setelah `migrate dev`. `npm install`
+sudah menjalankannya lewat skrip `postinstall`, tapi setiap kali `schema.prisma`
+berubah (misalnya setelah `git pull` yang membawa migration baru), jalankan:
+
+```bash
+npx prisma generate
+```
+
+Folder `src/generated/` tidak di-commit.
 
 ## 5. Jalankan server
 
@@ -108,3 +116,8 @@ Variabel `DB_SERVER` dan sejenisnya tidak terbaca. Pastikan `.env` ada di
 **`PrismaClient was instantiated without any options`**
 Di Prisma 7, `PrismaClient` wajib diberi driver adapter. Gunakan instance dari
 `src/lib/prisma.js`, jangan membuat `new PrismaClient()` sendiri.
+
+**`Cannot read properties of undefined (reading 'findUnique')`**
+Prisma Client belum di-generate ulang setelah schema berubah, sehingga model
+(misalnya `prisma.user`) belum ada. Jalankan `npx prisma generate`, lalu
+server restart otomatis.
