@@ -1,0 +1,136 @@
+.home {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  background: var(--color-paper);
+  color: var(--color-ink);
+}
+
+.home__header {
+  flex: none;
+  padding: max(82px, calc(env(safe-area-inset-top, 0px) + 36px)) 20px 20px;
+  background: var(--color-brand);
+  color: var(--color-paper);
+}
+
+.home__brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.home__title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.home__title {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 30px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home__add {
+  position: relative;
+  flex: none;
+}
+
+.add-menu {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 8px);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  width: max-content;
+  min-width: 200px;
+  overflow: hidden;
+  visibility: hidden;
+  border: 1px solid var(--color-ink);
+  border-radius: var(--radius-menu);
+  background: var(--color-accent);
+  color: var(--color-ink);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 200ms ease,
+    visibility 200ms;
+}
+
+.add-menu.is-open {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.add-menu button {
+  width: 100%;
+  height: 55px;
+  padding: 10px 20px;
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 18px;
+  font-weight: 700;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.add-menu button + button {
+  border-top: 1px solid rgb(0 0 0 / 15%);
+}
+
+.add-menu button:hover {
+  background: rgb(0 0 0 / 7%);
+}
+
+.add-menu button:focus-visible {
+  outline: 3px solid var(--color-brand);
+  outline-offset: -3px;
+}
+
+.home__list {
+  flex: 1;
+  margin: 0;
+  padding: 0 max(20px, calc((100vw - 680px) / 2));
+  overflow-y: auto;
+  list-style: none;
+  scrollbar-width: none;
+}
+
+.home__list::-webkit-scrollbar {
+  display: none;
+}
+
+.home__empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0 40px;
+  text-align: center;
+}
+
+.home__empty h2 {
+  margin: 0 0 8px;
+  font-size: 20px;
+}
+
+.home__empty p {
+  max-width: 280px;
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}

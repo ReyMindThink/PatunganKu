@@ -1,0 +1,96 @@
+.auth {
+  /* Jarak struk dari atas layar berubah mengikuti langkah (awal, daftar, masuk). */
+  --receipt-top: clamp(16px, 12dvh, 103px);
+  position: relative;
+  min-height: 100dvh;
+  padding-bottom: 32px;
+  overflow-x: clip;
+  background: var(--color-brand);
+  color: var(--color-paper);
+}
+
+.auth--register {
+  --receipt-top: -25px;
+}
+
+.auth--login {
+  --receipt-top: 26px;
+}
+
+.auth__stage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(100% - 100px, 360px);
+  margin-inline: auto;
+}
+
+.auth__stage .receipt {
+  margin-top: var(--receipt-top);
+  transition: margin-top 560ms var(--ease-standard);
+}
+
+.hero {
+  margin-top: 12px;
+}
+
+.hero > * {
+  margin: 0;
+}
+
+.hero__eyebrow {
+  color: var(--color-accent);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 14px;
+  text-transform: uppercase;
+}
+
+.hero__title {
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 34px;
+}
+
+.hero__text {
+  font-size: 12px;
+  line-height: 16px;
+  opacity: 0.8;
+}
+
+/* Tiga panel ditumpuk di satu sel grid; hanya satu yang terlihat. */
+.auth__panels {
+  display: grid;
+  margin-top: 20px;
+}
+
+.auth__panel {
+  grid-area: 1 / 1;
+  align-self: start;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 300ms ease,
+    visibility 300ms;
+}
+
+.auth__panel.is-visible {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.auth__panel--start {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth__stage .receipt,
+  .auth__panel {
+    transition-duration: 0.01ms;
+  }
+}

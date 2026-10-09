@@ -1,0 +1,20 @@
+.icon-button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  cursor: pointer;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.icon-button img {
+  display: block;
+  width: 28px;
+  height: 28px;
+}
+
+.icon-button:focus-visible {
+  outline: 3px solid var(--color-paper);
+  outline-offset: 2px;
+}

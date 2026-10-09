@@ -1,0 +1,27 @@
+:root {
+  /* Warna merek */
+  --color-brand: #022db3;
+  --color-brand-deep: #02289d;
+  --color-accent: #fdd302;
+  --color-accent-deep: #b09300;
+
+  /* Warna netral */
+  --color-ink: #000;
+  --color-paper: #fff;
+  --color-muted: #6b6b6b;
+  --color-line: #888;
+
+  /* Status saldo */
+  --color-positive: #0a7a3d;
+  --color-negative: #c0261d;
+
+  /* Teks di atas kertas struk (kuning) */
+  --color-receipt-ink: var(--color-paper);
+
+  --font-sans: "Plus Jakarta Sans Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  --radius-control: 8px;
+  --radius-menu: 13px;
+
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+}
