@@ -1,0 +1,103 @@
+/*
+  Ukuran memakai satuan cqw (1% lebar struk) agar seluruh isi mengecil
+  dan membesar proporsional mengikuti lebar struk.
+*/
+.receipt {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 293 / 443.979;
+  container-type: inline-size;
+}
+
+.receipt__paper {
+  position: absolute;
+  inset: 0;
+  background: var(--color-accent);
+  /* Tepi bawah bergerigi seperti struk sobek */
+  clip-path: polygon(
+    0 0, 100% 0, 100% 100%,
+    94.46% 96.464%, 88.92% 100%, 83.38% 96.464%, 77.839% 100%, 72.299% 96.464%,
+    66.759% 100%, 61.219% 96.464%, 55.679% 100%, 50% 96.464%, 44.321% 100%,
+    38.781% 96.464%, 33.241% 100%, 27.701% 96.464%, 22.161% 100%, 16.621% 96.464%,
+    11.08% 100%, 5.54% 96.464%, 0 100%
+  );
+}
+
+.receipt__content {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  padding-inline: 5.8cqw;
+  color: var(--color-receipt-ink);
+  font-size: 4.27cqw;
+  font-variant-numeric: tabular-nums;
+  line-height: normal;
+}
+
+.receipt__items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.receipt__row {
+  display: grid;
+  grid-template-columns: 16.54% 60.38% 23.08%;
+  align-items: center;
+  height: 8.59cqw;
+  white-space: nowrap;
+}
+
+.receipt__row span:last-child {
+  text-align: right;
+}
+
+.receipt__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.receipt__rule {
+  height: 0;
+  margin: 0;
+  border: 0;
+  border-top: 2px solid currentColor;
+  color: inherit;
+}
+
+.receipt__rule--double {
+  height: 2.5cqw;
+  border-bottom: 2px solid currentColor;
+}
+
+.receipt__rule--after-items {
+  margin-top: 4.3cqw;
+}
+
+.receipt__total {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-top: 1.5cqw;
+  font-weight: 700;
+}
+
+.receipt__amount {
+  font-size: 6.83cqw;
+  line-height: 1;
+}
+
+.receipt__rule--after-total {
+  margin-top: 14.5cqw;
+}
+
+.receipt__barcode {
+  width: 68.26cqw;
+  height: 16.4cqw;
+  margin: 3.5cqw auto 0;
+}
+
+.receipt__rule--end {
+  margin-top: 3.5cqw;
+}
