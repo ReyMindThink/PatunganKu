@@ -38,7 +38,7 @@ Keputusan di bawah sudah disetujui dan tidak ditanyakan ulang.
 | 5 | Pilihan item terkunci setelah ada pelunasan terkonfirmasi untuk pasangan pengutang-penalang. Dipersempit oleh K2 (bagian 5). |
 | 6 | Item belum terpilih setelah 24 jam: penalang menunjuk satu atau beberapa anggota. Yang pertama menerima mendapat item (atomik), sisanya otomatis batal. Jika semua menolak, penalang boleh mengambilnya sendiri. |
 | 7 | Mantan anggota yang masih berutang atau dipiutangi tampil sebagai mantan anggota di ledger sampai lunas, tanpa akses chat. Metode pembayarannya tetap terlihat oleh pihak yang bertransaksi. |
-| 8 | Gabung hanya lewat kode grup. Admin boleh menambah email yang sudah terdaftar. Admin mengatur: sembunyikan kode dari anggota biasa, dan gabung butuh persetujuan atau tidak. |
+| 8 | Gabung hanya lewat kode grup. Admin boleh mengundang email, dan undangan harus diterima penerimanya (K29). Admin mengatur: sembunyikan kode dari anggota biasa, dan gabung butuh persetujuan atau tidak. |
 | 9 | Dana kelompok hanya untuk transaksi mode MERATA. Tampil sebagai Dana Kelompok untuk semua anggota. Hanya admin dan pemegang dana yang melihat nama di pengaturan dana. Hanya pemegang dana yang menambah dana, tiap penambahan mencatat keterangan sumber. Pengecualian yang diterima ada di bagian 8. |
 | 10 | Pelunasan dicatat per pasangan pengutang-kreditur, bukan per transaksi. Formulir berisi nominal, metode, bukti (kecuali tunai), lalu disetujui kreditur. |
 | 11 | Stiker dibatalkan. |
@@ -67,6 +67,11 @@ Semua nilai ini disimpan di apps/backend/src/config/constants.js dan tidak ditul
 | Jeda pengingat email per utang | 12 jam |
 | Maksimal pengingat email per utang | 3 kali |
 | Batas ukuran gambar (struk dan chat) | 5 MB |
+| Batas anggota aktif per grup | 50 (usulan) |
+| Kedaluwarsa permintaan gabung dan undangan | 7 hari |
+| Jeda mengajukan gabung lagi setelah ditolak atau dikeluarkan | 24 jam |
+| Batas percobaan gabung lewat kode | 10 per 15 menit per pengguna |
+| Undangan tertunda per grup | maksimal 20 |
 | Kuorum merata (lebih dari 50% pemilih) | floor(n / 2) + 1 |
 | Kuorum admin tunggal (20% pemilih) | min(5, max(1, ceil(n / 5))), dihitung dengan bilangan bulat |
 
@@ -168,7 +173,7 @@ Perbaikan: FundEntry punya contributorId (opsional). Pemegang dana tidak bisa ke
 |---|---|
 | User | id, email (unik), passwordHash, name, notifyByEmail (default false), createdAt. Kolom phone dihapus. |
 | Group | id, name, code (unik), createdBy, createdAt. Tambah codeHidden (default false), joinRequiresApproval (default false). |
-| GroupMember | id, groupId, userId, role (OWNER, ADMIN, MEMBER), status (PENDING, ACTIVE, LEFT, REMOVED), joinedAt, leftAt, leftReason. Unik (groupId, userId). Baris tidak pernah dihapus. Anggota yang bergabung kembali memakai baris yang sama (status kembali ACTIVE, riwayat di AuditLog). Filtered unique index: satu OWNER aktif per grup (role OWNER dan status ACTIVE). |
+| GroupMember | id, groupId, userId, role (OWNER, ADMIN, MEMBER), status (ACTIVE, LEFT, REMOVED), joinedAt, leftAt, leftReason. Unik (groupId, userId). Baris tidak pernah dihapus. Anggota yang bergabung kembali memakai baris yang sama (status kembali ACTIVE, riwayat di AuditLog). Filtered unique index: satu OWNER aktif per grup (role OWNER dan status ACTIVE). |
 | Transaction | id, groupId, payerId (penalang), description, amount, mode (EQUAL_ALL, EQUAL_SUBSET, CUSTOM, ITEMIZED), status (DRAFT, PENDING_APPROVAL, ACTIVE, REJECTED, EXPIRED, WITHDRAWN, TAKEN_DOWN), receiptUrl, receiptStatus (PENDING, VERIFIED, FAILED, NEEDS_REVIEW), imageSha256, fingerprint, paidFromFund, version, expiresAt, itemsPhase (CLAIMING, FINALIZED), finalizedAt, finalizedBy, createdAt. Indeks (groupId, imageSha256) dan (groupId, fingerprint). |
 | TransactionSplit | Dihapus, diganti TransactionShare. |
 | TransactionShare | id, transactionId, userId, amount, consent (PENDING, ACCEPTED, REJECTED), consentAt. Unik (transactionId, userId). Ini tabel kerja (alur persetujuan), bukan ledger. |
@@ -437,12 +442,10 @@ Bila semua penunjukan DECLINED, penalang boleh mengambil item itu sendiri.
 
 | Dari | Ke | Pemicu |
 |---|---|---|
-| (baru) | ACTIVE | Gabung lewat kode tanpa persetujuan, atau disetujui admin, atau ditambah admin lewat email terdaftar. |
-| (baru) | PENDING | Gabung lewat kode pada grup dengan joinRequiresApproval. |
-| PENDING | ACTIVE atau REMOVED | Disetujui atau ditolak admin. |
+| (baru) | ACTIVE | Gabung lewat kode tanpa persetujuan, permintaan gabung disetujui admin, atau undangan diterima (K28, K29). |
 | ACTIVE | LEFT | Keluar sendiri. Hanya jika saldo nol, kecuali admin override dengan alasan tercatat. |
 | ACTIVE | REMOVED | Dikeluarkan admin. Syarat saldo sama dengan LEFT. OWNER tidak dapat dikeluarkan. |
-| LEFT atau REMOVED | ACTIVE | Bergabung kembali lewat kode. Baris yang sama dipakai. |
+| LEFT atau REMOVED | ACTIVE | Bergabung kembali. LEFT lewat kode. REMOVED hanya lewat permintaan yang disetujui admin atau undangan yang diterima, setelah jeda 24 jam (K30). Baris yang sama dipakai. |
 
 OWNER tidak dapat LEFT sebelum menyerahkan kepemilikan. Pemegang dana tidak dapat LEFT sebelum menyerahkan dana (K10). Mantan anggota yang masih punya utang atau piutang tetap tampil di ledger sebagai mantan anggota (keputusan 7).
 
@@ -457,7 +460,7 @@ Otorisasi ditegakkan di service, bukan di klien (prinsip 5). Setiap rute memerik
 | Melihat grup, anggota, riwayat transaksi | ya | ya | ya | Hanya anggota ACTIVE. Non-anggota mendapat 403. |
 | Melihat kode grup | ya | ya | bila tidak disembunyikan | Bergantung Group.codeHidden. |
 | Mengubah pengaturan grup (kode tersembunyi, persetujuan gabung, metode pembayaran grup) | ya | ya | tidak | |
-| Menyetujui atau menolak anggota PENDING, menambah anggota via email terdaftar | ya | ya | tidak | |
+| Menyetujui atau menolak permintaan gabung, mengundang via email terdaftar | ya | ya | tidak | |
 | Mengeluarkan anggota | ya | hanya MEMBER | tidak | Syarat saldo nol atau override. K12. |
 | Mengangkat atau menurunkan admin, memindahkan kepemilikan | ya | tidak | tidak | Keputusan 1. |
 | Keluar sendiri | setelah serah terima | ya | ya | Syarat saldo nol atau override. |
@@ -701,3 +704,65 @@ Perbaikan:
 - Pengingat hanya dapat dikirim kepada debitur dengan N positif kepada pengirim, termasuk mantan anggota yang masih berutang.
 
 <!-- akhir-bagian-10d -->
+
+### K28. Permintaan gabung dan undangan di tabel terpisah (mengganti status PENDING)
+
+Masalah: GroupMember.status PENDING menimpa status LEFT atau REMOVED anggota lama yang mengajukan gabung. Jika permintaan kedaluwarsa atau dibatalkan, status sebelumnya hilang. Permintaan juga dapat menumpuk tanpa batas waktu.
+
+Perbaikan:
+- GroupMember hanya memiliki status ACTIVE, LEFT, dan REMOVED. Hanya anggota ACTIVE yang menjadi pemilih, peserta, dan penerima siaran grup.
+- GroupJoinRequest: id, groupId, userId, status (PENDING, APPROVED, REJECTED, CANCELLED, EXPIRED), createdAt, decidedAt, decidedBy. Filtered unique (groupId, userId) bila status PENDING.
+- GroupInvitation: id, groupId, inviteeEmail (huruf kecil, dinormalisasi), invitedBy, status (PENDING, ACCEPTED, DECLINED, CANCELLED, EXPIRED), createdAt, decidedAt, acceptedBy. Filtered unique (groupId, inviteeEmail) bila status PENDING.
+- Keduanya tabel kerja. Setiap aksinya tetap ditulis ke AuditLog (K19). Kedaluwarsa tujuh hari dievaluasi saat dibaca, dengan job terjadwal sebagai cadangan.
+- Menyetujui permintaan atau menerima undangan menghidupkan kembali baris GroupMember yang sama (status ACTIVE) atau membuat baris baru.
+
+### K29. Undangan email harus diterima, dan tidak membuka status registrasi (mengubah keputusan 8)
+
+Masalah:
+- Menambah anggota langsung memasukkan orang ke grup tanpa persetujuannya. Ia langsung menjadi pemilih dan dapat dibebani oleh aturan MAJORITY pada biaya tanpa struk.
+- Endpoint tambah lewat email memberi tahu admin apakah sebuah email terdaftar. Pembuat grup otomatis OWNER, jadi siapa pun yang mendaftar dapat membuat grup lalu menguji alamat email apa pun.
+
+Perbaikan:
+- Admin mengundang, dan penerima harus menerima. Yang berubah dari keputusan 8: kata menambah menjadi mengundang.
+- Respons pembuatan undangan selalu sama (202), tanpa membedakan email terdaftar, sudah menjadi anggota, atau sudah diundang.
+- Daftar undangan untuk admin hanya memuat email yang disamarkan dan status, bukan nama pemilik akun.
+- Undangan dicocokkan dengan email akun saat penerima membaca daftar undangannya. Orang yang mendaftar dengan email itu dalam tujuh hari akan melihatnya.
+- Notifikasi dalam aplikasi hanya dikirim bila akunnya sudah ada. Tidak ada email keluar ke alamat tanpa akun, supaya fitur ini tidak dapat dipakai mengirim spam.
+- Undangan tertunda maksimal 20 per grup.
+
+Risiko yang diterima: email belum diverifikasi, jadi akun yang didaftarkan dengan email orang lain dapat menerima undangan yang ditujukan ke pemilik email aslinya. Dampaknya terbatas pada grup yang diundang, dan butuh admin yang salah mengetik atau menuju alamat yang belum didaftarkan pemiliknya.
+
+### K30. Bergabung kembali dan rotasi kode
+
+Masalah: aturan awal membolehkan LEFT atau REMOVED kembali lewat kode. Anggota yang dikeluarkan admin dapat langsung masuk lagi dengan kode yang sama, sehingga pengeluaran tidak berarti.
+
+Perbaikan:
+- LEFT bergabung lewat kode, atau lewat permintaan bila joinRequiresApproval.
+- REMOVED hanya dapat kembali lewat permintaan yang disetujui admin (selalu, tanpa melihat pengaturan grup) atau undangan yang diterima.
+- Jeda 24 jam sebelum mengajukan lagi, dihitung dari yang lebih akhir antara leftAt (untuk REMOVED) dan decidedAt permintaan terakhir yang ditolak. Undangan tidak terkena jeda karena admin sendiri yang mengundang.
+- Admin dapat memutar kode. Kode lama langsung tidak berlaku. Kode baru perlu dibagikan ulang.
+
+### K31. Keluar dan dikeluarkan
+
+Penghalang yang tidak dapat dilewati: pemilik kepemilikan (OWNER harus menyerahkan dulu) dan pemegang dana (K10).
+
+Penghalang yang dapat dilewati admin dengan alasan tercatat (OVERRIDE_LEAVE): saldo tidak nol pada pasangan mana pun. Override hanya lewat aksi dikeluarkan dengan overrideBalance. Keluar sendiri dengan saldo tidak nol tetap diblokir, dan anggota meminta admin. Hasil override adalah REMOVED, bukan LEFT.
+
+Diselesaikan sistem secara otomatis saat seseorang keluar atau dikeluarkan, semuanya tercatat dengan actorId kosong:
+- Transaksi DRAFT miliknya dihapus.
+- Transaksi miliknya berstatus PENDING_APPROVAL menjadi WITHDRAWN.
+- Transaksi ITEMIZED miliknya pada fase CLAIMING difinalisasi sistem (K18). Penalang yang pergi menanggung sisa unit.
+- Baris HOLDING miliknya dilepas dan penunjukan OFFERED untuknya menjadi CANCELLED.
+- Consent PENDING sebagai peserta menjadi REJECTED. Transaksinya tetap berjalan, dan penalang mengubah daftar peserta bila perlu.
+- Suara yang sudah masuk tetap dihitung dan eligibleCount tidak berubah (G2).
+- Ledger tidak berubah. Mantan anggota tetap tampil sampai saldonya nol (keputusan 7).
+
+Mengeluarkan admin: admin harus diturunkan lebih dulu oleh OWNER (K12). Aturan yang sama berlaku bila OWNER yang mengeluarkan.
+
+### K32. Batas anggota dan percobaan kode
+
+- Maksimal 50 anggota ACTIVE per grup (usulan, konstanta di constants.js). Pemeriksaan dilakukan saat bergabung, persetujuan permintaan, dan penerimaan undangan.
+- Kode grup 6 karakter dapat ditebak. Kekuatannya bergantung alfabet kode di group.service.js, yang belum diperiksa untuk dokumen ini. Pembatas laju 10 percobaan per 15 menit per pengguna dipasang pada endpoint bergabung sejak Tahap 1, tidak menunggu Tahap 4.
+- Pembatas laju per pengguna tidak menghentikan penyerang yang memakai banyak akun. Pengaman utamanya adalah pengaturan kode tersembunyi, persetujuan gabung, dan rotasi kode.
+
+<!-- akhir-bagian-10e -->

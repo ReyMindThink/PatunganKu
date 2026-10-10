@@ -331,6 +331,9 @@ Aturan: type adalah string. Klien mengabaikan type dan field payload yang tidak 
 | PAYMENT_DECIDED | Pengirim pelunasan | paymentId, status |
 | REMINDER | Debitur | creditor, amount |
 | ITEMS_CLOSED | Pemegang klaim yang dilepas saat penalang menutup | transactionId, closedBy, releasedItems |
+| JOIN_REQUEST | Semua admin | requestId, user |
+| GROUP_INVITE | Penerima undangan | invitationId, group, invitedBy |
+| MEMBERSHIP_CHANGED | Pengguna yang bersangkutan | groupId, change (JOINED, REJECTED, REMOVED, ROLE_CHANGED), role |
 
 CONSENT_REQUEST menambah daftar tipe di architecture.md 6.4. Karena type berupa string, tidak ada perubahan skema.
 
@@ -992,3 +995,219 @@ Kode yang sudah ada dipakai untuk kondisi lain: amount-exceeds-debt, invalid-rec
 Koleksi Postman (docs/postman/build.mjs) diperbarui mengikuti perubahan di atas.
 
 <!-- akhir-bagian-api-8 -->
+
+## 11. Grup, anggota, dan peran
+
+### 11.1 Konsep dan objek
+
+- Awalan rute: /api/groups. Semua endpoint tulis di bagian ini wajib Idempotency-Key (2.6).
+- Keanggotaan hanya ACTIVE, LEFT, dan REMOVED. Permintaan gabung dan undangan adalah objek terpisah (architecture.md K28).
+- Hanya anggota ACTIVE yang membaca isi grup. Mantan anggota hanya melihat ledger miliknya (10.1).
+- Endpoint grup tidak pernah menampilkan email pengguna.
+- Tidak ada penghapusan grup. Grup yang ditinggalkan semua anggotanya tetap ada karena ledger masih merujuknya.
+- Database dev direset (G3), jadi tidak ada migrasi data peran lama.
+
+Objek grup untuk anggota ACTIVE:
+
+    {
+      "data": {
+        "id": 12,
+        "name": "Kos Melati",
+        "code": "K7M2QX",
+        "codeHidden": false,
+        "joinRequiresApproval": false,
+        "myRole": "OWNER",
+        "membership": "ACTIVE",
+        "memberCount": 3,
+        "memberLimit": 50,
+        "createdAt": "2026-10-01T08:00:00.000Z"
+      }
+    }
+
+Aturan:
+- code bernilai null bila codeHidden true dan pemanggil MEMBER. Admin dan OWNER tetap melihat kode.
+- Mantan anggota yang masih punya saldo menerima objek terbatas: { id, name, membership, myRole: null }, tanpa kode dan pengaturan.
+- Nama grup adalah data tak tepercaya dan dirender sebagai teks biasa (2.2).
+- Nilai kode pada contoh hanya ilustrasi.
+
+### 11.2 Membuat, melihat, dan mengatur grup
+
+| Endpoint | Fungsi |
+|---|---|
+| POST /api/groups | Body { name }. 201 dengan objek grup. Pembuat menjadi OWNER (architecture.md keputusan 1). |
+| GET /api/groups | Daftar grup saya, tanpa page (jumlahnya kecil). |
+| GET /api/groups/:groupId | Objek grup. |
+| PATCH /api/groups/:groupId | Admin. Body { name, codeHidden, joinRequiresApproval }, semua opsional. Mengembalikan objek grup terbaru. |
+| POST /api/groups/:groupId/code/rotate | Admin. Kode lama langsung tidak berlaku. 200 dengan { data: { code } }. |
+
+Daftar grup saya:
+
+    {
+      "data": [
+        { "id": 12, "name": "Kos Melati", "membership": "ACTIVE", "myRole": "OWNER", "memberCount": 3, "balance": -25000, "pendingJoinRequests": 2 },
+        { "id": 15, "name": "KKN Desa", "membership": "LEFT", "myRole": null, "memberCount": null, "balance": 15000, "pendingJoinRequests": null }
+      ]
+    }
+
+- balance adalah saldo bersih saya di grup itu: positif berarti orang lain berutang kepada saya (10.2). Pada contoh, Rp25.000 berutang di Kos Melati dan Rp15.000 dipiutangi di KKN Desa.
+- Grup dengan membership LEFT atau REMOVED hanya muncul bila saldo tidak nol.
+- pendingJoinRequests hanya terisi untuk admin dan OWNER, selain itu null.
+- Panjang nama divalidasi dengan zod (nilainya ditetapkan saat implementasi).
+- Mengubah nama atau pengaturan menulis satu baris riwayat (K19).
+
+### 11.3 Bergabung dan permintaan gabung
+
+| Endpoint | Fungsi |
+|---|---|
+| POST /api/groups/join | Body { code }. Wajib Idempotency-Key. |
+| GET /api/me/join-requests | Permintaan gabung saya yang masih PENDING. |
+| POST /api/me/join-requests/:requestId/cancel | Membatalkan permintaan saya. 204. |
+| GET /api/groups/:groupId/join-requests | Admin. Berkursor (2.5). Query: status (bawaan PENDING). |
+| POST /api/groups/:groupId/join-requests/:requestId/approve | Admin. Memasukkan pemohon sebagai ACTIVE. |
+| POST /api/groups/:groupId/join-requests/:requestId/reject | Admin. 204. |
+
+Hasil bergabung lewat kode:
+
+| Keadaan | Respons |
+|---|---|
+| Kode benar, grup tanpa persetujuan, pemanggil bukan REMOVED | 200 { data: { outcome: "JOINED", group: { id, name }, requestId: null } } |
+| Kode benar, joinRequiresApproval, atau pemanggil berstatus REMOVED | 202 { data: { outcome: "REQUESTED", group: { id, name }, requestId: 91 } } |
+| Pemanggil punya undangan PENDING untuk grup itu | 200 dengan outcome JOINED. Undangan menjadi ACCEPTED. Jeda dan persetujuan tidak berlaku (K30). |
+
+Kondisi gagal:
+
+| Kondisi | Respons |
+|---|---|
+| Kode tidak dikenal atau sudah diputar | 404 not-found (tidak dibedakan) |
+| Sudah menjadi anggota ACTIVE | 409 already-member |
+| Sudah ada permintaan PENDING | 409 join-pending |
+| Dalam jeda 24 jam | 429 join-cooldown dengan Retry-After |
+| Grup sudah 50 anggota | 409 group-full |
+| Lebih dari 10 percobaan dalam 15 menit | 429 rate-limited dengan Retry-After |
+
+Objek permintaan gabung:
+
+    { "id": 91, "user": { "id": 7, "name": "Dina" }, "status": "PENDING", "createdAt": "2026-10-10T09:00:00.000Z", "expiresAt": "2026-10-17T09:00:00.000Z", "decidedAt": null }
+
+Aturan:
+- Pemegang kode melihat nama grup sebelum disetujui. Ini pengecualian yang diterima.
+- Untuk daftar milik saya (GET /api/me/join-requests), objek berisi group menggantikan user.
+- Menyetujui permintaan yang sudah kedaluwarsa atau tidak lagi PENDING: 409 invalid-state. Grup penuh: 409 group-full.
+- Menyetujui dan menolak menulis riwayat. Pemohon menerima notifikasi MEMBERSHIP_CHANGED (JOINED atau REJECTED) tanpa alasan. Admin menerima JOIN_REQUEST saat permintaan dibuat.
+- Jeda 24 jam dihitung dari yang lebih akhir antara leftAt (REMOVED) dan decidedAt permintaan terakhir yang ditolak. Contoh: dikeluarkan 2026-10-10T08:00:00Z, boleh mengajukan lagi sejak 2026-10-11T08:00:00Z.
+- Satu pemohon hanya punya satu permintaan PENDING per grup.
+
+### 11.4 Undangan
+
+| Endpoint | Fungsi |
+|---|---|
+| POST /api/groups/:groupId/invitations | Admin. Body { email }. Selalu 202 { data: { accepted: true } }. |
+| GET /api/groups/:groupId/invitations | Admin. Undangan PENDING dengan email disamarkan. |
+| DELETE /api/groups/:groupId/invitations/:invitationId | Admin membatalkan. 204. |
+| GET /api/me/invitations | Undangan untuk email akun saya. |
+| POST /api/me/invitations/:invitationId/accept | 200 dengan { data: { group: { id, name }, membership: "ACTIVE" } }. |
+| POST /api/me/invitations/:invitationId/decline | 204. |
+
+Aturan:
+- Pembuatan undangan selalu 202, terlepas dari email terdaftar, sudah menjadi anggota, atau sudah diundang. Tujuannya mencegah pengujian email (architecture.md K29). Format email yang salah: 400 validation-failed. Undangan tertunda mencapai 20: 409 invitation-limit.
+- Daftar admin menampilkan email dengan huruf pertama lalu tiga tanda bintang lalu domain, tanpa nama pemilik akun:
+
+    { "id": 31, "email": "a***@gmail.com", "status": "PENDING", "createdAt": "2026-10-10T09:00:00.000Z", "expiresAt": "2026-10-17T09:00:00.000Z" }
+
+- Daftar undangan penerima:
+
+    { "id": 31, "group": { "id": 12, "name": "Kos Melati" }, "invitedBy": { "id": 4, "name": "Rey" }, "createdAt": "2026-10-10T09:00:00.000Z", "expiresAt": "2026-10-17T09:00:00.000Z" }
+
+- Menerima undangan menggantikan persetujuan admin dan jeda 24 jam. Grup penuh: 409 group-full. Undangan yang kedaluwarsa atau sudah diputuskan: 409 invalid-state.
+- Notifikasi GROUP_INVITE hanya dibuat bila akun dengan email itu sudah ada saat undangan dibuat. Yang mendaftar kemudian melihatnya lewat GET /api/me/invitations dalam tujuh hari. Tidak ada email keluar.
+
+<!-- akhir-bagian-api-9a -->
+
+### 11.5 Anggota, peran, dan kepemilikan
+
+| Endpoint | Fungsi |
+|---|---|
+| GET /api/groups/:groupId/members | Anggota ACTIVE. Tanpa page (maksimal 50). |
+| PUT /api/groups/:groupId/members/:userId/role | Hanya OWNER. Body { role: "ADMIN" atau "MEMBER" }. 200 dengan anggota terbaru. |
+| POST /api/groups/:groupId/ownership/transfer | Hanya OWNER. Body { toUserId }. 200 dengan { data: { owner: { id, name } } }. |
+
+Anggota:
+
+    { "user": { "id": 4, "name": "Rey" }, "role": "OWNER", "joinedAt": "2026-10-01T08:00:00.000Z" }
+
+Aturan:
+- Daftar anggota tidak memuat email dan tidak menandai pemegang dana (architecture.md keputusan 9).
+- Mengubah peran: sasaran harus ACTIVE, bukan OWNER, dan bukan diri sendiri. Pelanggaran: 409 invalid-state. Peran OWNER hanya berpindah lewat serah terima.
+- Serah terima: sasaran harus ACTIVE dan berperan ADMIN, selain itu 409 invalid-state. Di dalam satu transaksi database, OWNER lama diturunkan menjadi ADMIN lebih dulu, baru sasaran dinaikkan menjadi OWNER. Urutan ini menjaga filtered unique index satu OWNER aktif per grup.
+- Admin yang diturunkan kehilangan hak suara pada Approval berbasis admin yang masih terbuka. Hak suara diperiksa saat suara masuk (canVote, 6.3). eligibleCount tidak dihitung ulang (G2).
+- Setiap perubahan menulis riwayat (ROLE_CHANGE, OWNERSHIP_TRANSFER) dan notifikasi MEMBERSHIP_CHANGED bertipe ROLE_CHANGED.
+
+### 11.6 Keluar dan dikeluarkan
+
+| Endpoint | Fungsi |
+|---|---|
+| POST /api/groups/:groupId/leave | Keluar sendiri. 204. |
+| POST /api/groups/:groupId/members/:userId/remove | Admin atau OWNER. Body { reason, overrideBalance }. 204. |
+
+Penghalang menghasilkan 409 dengan kode leave-blocked dan field blockers:
+
+    {
+      "type": "about:blank",
+      "title": "Conflict",
+      "status": 409,
+      "code": "leave-blocked",
+      "detail": "Tidak dapat keluar dari grup.",
+      "blockers": [
+        { "code": "OWNER" },
+        { "code": "BALANCE", "owes": 30000, "owed": 5000 }
+      ]
+    }
+
+| Penghalang | Dapat dilewati? |
+|---|---|
+| OWNER | Tidak. Serah terima dulu. |
+| FUND_HOLDER | Tidak. Serahkan atau tutup dana dulu (architecture.md K10). |
+| BALANCE (saldo tidak nol pada pasangan mana pun) | Hanya admin lewat remove dengan overrideBalance true dan reason wajib. Hasilnya REMOVED dan riwayat OVERRIDE_LEAVE. |
+
+Aturan:
+- Keluar sendiri dengan saldo tidak nol selalu diblokir. Anggota meminta admin untuk mengeluarkannya.
+- Remove: pemanggil harus admin atau OWNER, selain itu 403 forbidden. Sasaran OWNER: 403 forbidden. Sasaran diri sendiri: 400 validation-failed (gunakan leave). Sasaran ADMIN: 409 invalid-state dengan detail turunkan dulu (K12 dan K31, berlaku juga bagi OWNER).
+- reason wajib bila overrideBalance true, selain itu opsional. Alasan hanya masuk riwayat dan tidak dikirim ke orang yang dikeluarkan.
+- Hasilnya membership LEFT (leave) atau REMOVED (remove). Ledger tidak berubah.
+- Yang diselesaikan sistem otomatis (DRAFT dihapus, PENDING_APPROVAL ditarik, ITEMIZED CLAIMING difinalisasi, HOLDING dilepas, penunjukan dibatalkan, consent PENDING menjadi REJECTED) tercantum di architecture.md K31, masing-masing dengan baris riwayat actor null.
+- Orang yang dikeluarkan menerima MEMBERSHIP_CHANGED (change REMOVED) tanpa alasan. Server mencabut koneksi socket-nya dari room grup (3.2).
+- Mantan anggota tetap dapat membaca saldo dan mengelola pelunasan miliknya (10.1).
+
+### 11.7 Event, notifikasi, dan kode error
+
+| Event | Room | Muatan |
+|---|---|---|
+| member:updated | group:<id> | { groupId, userId, change (JOINED, LEFT, REMOVED, ROLE_CHANGED), serverTime } |
+| group:updated | group:<id> | { groupId, serverTime } |
+
+Permintaan gabung dan undangan tidak disiarkan ke grup. Admin menerima notification:created dengan tipe JOIN_REQUEST (6.2). Alasan pengeluaran tidak pernah ada di muatan event.
+
+| code | Status | Arti |
+|---|---|---|
+| join-pending | 409 | Sudah ada permintaan gabung yang menunggu. |
+| join-cooldown | 429 | Dalam jeda 24 jam. Disertai Retry-After. |
+| group-full | 409 | Grup sudah 50 anggota ACTIVE. |
+| invitation-limit | 409 | Undangan tertunda mencapai 20. |
+| leave-blocked | 409 | Ada penghalang. Berisi blockers. |
+
+Kode yang sudah ada dipakai untuk kondisi lain: not-found, already-member, forbidden, invalid-state, validation-failed, dan rate-limited.
+
+Tipe action riwayat tambahan (melengkapi 8.2): JOIN_REQUEST, JOIN_APPROVE, JOIN_REJECT, JOIN_CANCEL, INVITE, INVITE_ACCEPT, INVITE_DECLINE, INVITE_CANCEL, MEMBER_JOIN, MEMBER_LEAVE, MEMBER_REMOVE, ROLE_CHANGE, OWNERSHIP_TRANSFER, CODE_ROTATE, GROUP_UPDATE.
+
+### 11.8 Migrasi endpoint grup yang sudah berjalan
+
+| Endpoint lama | Perubahan |
+|---|---|
+| POST /api/groups | Idempotency-Key wajib. Respons memakai objek 11.1. Pembuat menjadi OWNER. |
+| POST /api/groups/join | Respons menjadi { outcome, group, requestId }. Kode salah menjadi not-found (sebelumnya group-not-found). Bisa 202 bila perlu persetujuan. Ada pembatas laju 10 percobaan per 15 menit per pengguna sejak Tahap 1. |
+| GET /api/groups | Bentuk baru 11.2 dengan balance dan membership. |
+| GET /api/groups/:id | Parameter menjadi :groupId. Respons objek 11.1. Mantan anggota dengan saldo mendapat objek terbatas. Selain itu yang bukan anggota ACTIVE mendapat 403 forbidden. |
+
+Koleksi Postman (docs/postman/build.mjs) diperbarui mengikuti perubahan ini.
+
+<!-- akhir-bagian-api-9 -->
