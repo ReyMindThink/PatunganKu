@@ -169,7 +169,7 @@ Perbaikan: FundEntry punya contributorId (opsional). Pemegang dana tidak bisa ke
 | User | id, email (unik), passwordHash, name, notifyByEmail (default false), createdAt. Kolom phone dihapus. |
 | Group | id, name, code (unik), createdBy, createdAt. Tambah codeHidden (default false), joinRequiresApproval (default false), settleSimplify (default true). |
 | GroupMember | id, groupId, userId, role (OWNER, ADMIN, MEMBER), status (PENDING, ACTIVE, LEFT, REMOVED), joinedAt, leftAt, leftReason. Unik (groupId, userId). Baris tidak pernah dihapus. Anggota yang bergabung kembali memakai baris yang sama (status kembali ACTIVE, riwayat di AuditLog). Filtered unique index: satu OWNER aktif per grup (role OWNER dan status ACTIVE). |
-| Transaction | id, groupId, payerId (penalang), description, amount, mode (EQUAL_ALL, EQUAL_SUBSET, ITEMIZED), status (PENDING_APPROVAL, ACTIVE, REJECTED, EXPIRED, TAKEN_DOWN), receiptUrl, receiptStatus (PENDING, VERIFIED, FAILED, NEEDS_REVIEW), imageSha256, fingerprint, paidFromFund, version, expiresAt, createdAt. Indeks (groupId, imageSha256) dan (groupId, fingerprint). |
+| Transaction | id, groupId, payerId (penalang), description, amount, mode (EQUAL_ALL, EQUAL_SUBSET, CUSTOM, ITEMIZED), status (DRAFT, PENDING_APPROVAL, ACTIVE, REJECTED, EXPIRED, WITHDRAWN, TAKEN_DOWN), receiptUrl, receiptStatus (PENDING, VERIFIED, FAILED, NEEDS_REVIEW), imageSha256, fingerprint, paidFromFund, version, expiresAt, itemsPhase (CLAIMING, FINALIZED), finalizedAt, finalizedBy, createdAt. Indeks (groupId, imageSha256) dan (groupId, fingerprint). |
 | TransactionSplit | Dihapus, diganti TransactionShare. |
 | TransactionShare | id, transactionId, userId, amount, consent (PENDING, ACCEPTED, REJECTED), consentAt. Unik (transactionId, userId). Ini tabel kerja (alur persetujuan), bukan ledger. |
 | PaymentConfirmation | id, groupId, senderId, receiverId, amount, methodType (BANK, EWALLET, CASH), proofUrl, status (PENDING, CONFIRMED, REJECTED, CANCELLED), createdAt, decidedAt, cancelledAt. Bukti wajib kecuali CASH (divalidasi di service). Saat CONFIRMED menulis satu entri SETTLEMENT di ledger. |
@@ -238,7 +238,7 @@ id, itemId, assigneeId, qty, offerGroupId, status (OFFERED, ACCEPTED, DECLINED, 
 
 **Approval**
 
-id, groupId, subjectType (TRANSACTION, REVISION, FUND_MARK), subjectId, rule, requestedBy, eligibleCount, required, status (OPEN, APPROVED, REJECTED, EXPIRED), expiresAt, decidedAt, createdAt.
+id, groupId, subjectType (TRANSACTION, REVISION, FUND_MARK), subjectId, rule, requestedBy, eligibleCount, required, status (OPEN, APPROVED, REJECTED, EXPIRED, CANCELLED), expiresAt, decidedAt, createdAt.
 
 Nilai rule dan aturan keputusannya:
 
@@ -619,3 +619,50 @@ Perbaikan:
 Batas jaminan: trigger database mencegah perubahan dan penghapusan lewat aplikasi. Pengelola database yang memiliki akses langsung masih dapat mengubah data. Rantai hash tidak dibuat. Laporan tidak boleh mengklaim riwayat kebal terhadap pengelola server.
 
 <!-- akhir-bagian-10b -->
+
+### K20. Tahap DRAFT, penarikan pengajuan, dan pemilihan jalur saat submit
+
+Masalah: tabel 7.2 memilih jalur persetujuan saat transaksi diajukan berdasarkan hasil verifikasi struk, tetapi struk baru diunggah dan diverifikasi sesudah transaksi dibuat. Alurnya tidak dapat dijalankan. Pengaju yang salah kirim juga tidak punya cara menarik pengajuan selain menunggu kedaluwarsa tujuh hari.
+
+Perbaikan:
+- Transaction.status mendapat DRAFT dan WITHDRAWN. Approval.status mendapat CANCELLED.
+- Transaksi dibuat sebagai DRAFT. Hanya penalang yang melihatnya. Tidak ada ledger, notifikasi, atau suara. Struk diunggah dan diverifikasi saat DRAFT.
+- Endpoint submit menjalankan tabel 7.2 dan memindahkan transaksi dari DRAFT ke status tujuannya. Pilihan jalur terjadi pada saat submit, bukan saat pembuatan.
+- DRAFT bukan bagian riwayat. Aksi pada DRAFT dikecualikan dari K19, dan DRAFT yang dihapus tidak meninggalkan jejak. Pencatatan AuditLog dimulai saat submit.
+- WITHDRAWN: penalang dapat menarik pengajuannya selama PENDING_APPROVAL. Approval yang terbuka menjadi CANCELLED, consent yang tertunda gugur, dan status WITHDRAWN tampil di riwayat seperti REJECTED. Transaksi ACTIVE tidak dapat ditarik. Koreksinya lewat revisi atau takedown.
+- Struk tidak dapat ditambahkan sesudah submit. Penalang membuat transaksi baru bila perlu.
+- Kecocokan isi struk (K8) mengubah jalur: struk VERIFIED yang berstatus possible-duplicate diperlakukan seperti NEEDS_REVIEW, jadi masuk Approval admin.
+
+### K21. Mode CUSTOM dipertahankan (usulan, menunggu konfirmasi)
+
+Masalah: kode yang sudah berjalan mendukung pembagian CUSTOM (nominal per orang, jumlah harus sama dengan total), tetapi spesifikasi final hanya menyebut tiga mode.
+
+Perbaikan: CUSTOM menjadi mode keempat. Aturan persetujuannya identik dengan EQUAL_SUBSET: setiap peserta yang bukan penalang harus consent atas nominalnya, dan struk gagal AI tetap divalidasi admin (K11). Semua aturan di 7.1 sampai 7.3 yang menyebut EQUAL_SUBSET berlaku juga untuk CUSTOM.
+
+### K22. Kenaikan tanggungan yang tidak disetujui
+
+Masalah: revisi dapat menaikkan total. Peserta yang tanggungannya naik harus setuju ulang (keputusan 4). Jika ia menolak, jumlah semua bagian menjadi lebih kecil dari total transaksi.
+
+Perbaikan:
+- Selama consent tertunda, CHARGE tambahan belum ditulis. Penurunan tanggungan langsung berlaku (REVERSAL sebesar selisih).
+- Bagian kenaikan yang ditolak, atau consent-nya kedaluwarsa tujuh hari, ditanggung penalang dan tidak menjadi utang siapa pun, sama seperti unit yang tidak diklaim (K18). Penalang dapat mengajukan revisi baru.
+- Jumlah seluruh bagian, termasuk bagian yang ditanggung penalang, tetap sama dengan total.
+
+Contoh: total Rp70.000 dibagi tiga (Rp23.334, Rp23.333, Rp23.333) naik menjadi Rp76.000 (Rp25.334, Rp25.333, Rp25.333). Kenaikannya Rp2.000 per orang. Jika satu peserta menolak, Rp2.000 ditanggung penalang.
+
+Risiko yang diterima: revisi yang dilakukan admin dapat membuat penalang menanggung bagian yang tidak disetujui peserta. Pembatasnya adalah riwayat (K19) dan kewenangan admin yang tercatat.
+
+### K23. Siapa melihat daftar consent
+
+Masalah: membuka status consent kepada seluruh anggota mengumumkan siapa yang menolak. Spesifikasi hanya menyatakan peserta yang menolak tidak dibebani, bukan diumumkan.
+
+Perbaikan:
+- Selama transaksi belum ACTIVE, daftar peserta beserta status consent hanya terlihat oleh penalang, admin, dan masing-masing peserta untuk bagiannya sendiri. Anggota lain hanya melihat jumlah peserta.
+- Setelah ACTIVE, seluruh anggota melihat daftar peserta dan nominalnya. Pada saat itu semua consent sudah ACCEPTED dan tidak ada informasi penolakan yang terbuka.
+- Peserta yang menolak dikeluarkan dari daftar peserta saat penalang merevisi. Penolakannya hanya tercatat di riwayat dengan akses yang sama.
+
+### K24. Zona waktu pengelompokan bulan
+
+Riwayat bulanan dikelompokkan menurut Asia/Jakarta (UTC+7), bukan UTC. Waktu tetap disimpan UTC. Contoh: transaksi pada 1 November 00:30 WIB tersimpan sebagai 31 Oktober 17:30 UTC dan tetap masuk November. Pengelompokan memakai Transaction.createdAt, bukan tanggal pembelian di struk (ReceiptExtraction.purchasedAt), supaya satu transaksi tidak berpindah bulan ketika hasil baca struk direvisi. Zona waktu disimpan sebagai konstanta.
+
+<!-- akhir-bagian-10c -->

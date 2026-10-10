@@ -263,7 +263,7 @@ Catatan:
 
 Status struk. Kode lama memakai RECEIPT_STATUS.REJECTED untuk struk yang gagal. Di rancangan, Transaction.status = REJECTED berarti persetujuan ditolak, sehingga satu kata bermakna dua hal. Status struk lama REJECTED dipetakan menjadi FAILED. Nilai receiptStatus yang berlaku: PENDING, VERIFIED, FAILED, NEEDS_REVIEW (architecture.md 6.1).
 
-Alasan keputusan (field decision.reason pada verifikasi struk). Nilai lama dipertahankan dan dua nilai baru ditambahkan.
+Alasan keputusan (field decision.reason pada verifikasi struk). Nilai lama dipertahankan dan tiga nilai baru ditambahkan.
 
 | reason | receiptStatus | Arti |
 |---|---|---|
@@ -274,6 +274,7 @@ Alasan keputusan (field decision.reason pada verifikasi struk). Nilai lama diper
 | total-mismatch | FAILED | Total struk tidak sama dengan nominal transaksi. |
 | tax-mode-unknown | NEEDS_REVIEW | PPN tidak dapat dipastikan eksklusif atau inklusif. Baru. |
 | arithmetic-mismatch | NEEDS_REVIEW | Item ditambah service, pajak (bila eksklusif), dan ongkir dikurangi diskon tidak sama dengan total. Baru. |
+| possible-duplicate | NEEDS_REVIEW | Isi mirip struk lain di grup yang sama (merchant, tanggal, total, jam). Perlu keputusan admin (K8). Baru. |
 
 Nilai constants.js lain untuk RECEIPT_STATUS belum diperiksa untuk dokumen ini.
 
@@ -580,3 +581,188 @@ Daftar action awal (dilengkapi di bagian lain): CLAIM_SET, CLAIM_DONE, CLAIM_REL
 Nilai oldValue, newValue, dan reason adalah data tak tepercaya dan dirender sebagai teks biasa (2.2).
 
 <!-- akhir-bagian-api-6 -->
+
+## 9. Transaksi, struk, dan revisi
+
+### 9.1 Objek dan status
+
+Awalan rute: /api/groups/:groupId/transactions. Semua endpoint tulis wajib Idempotency-Key (2.6).
+
+Mode: EQUAL_ALL, EQUAL_SUBSET, CUSTOM, ITEMIZED (K21). Status: DRAFT, PENDING_APPROVAL, ACTIVE, REJECTED, EXPIRED, WITHDRAWN, TAKEN_DOWN. DRAFT hanya terlihat oleh penalang. REJECTED, EXPIRED, WITHDRAWN, dan TAKEN_DOWN adalah status akhir dan tetap tampil di riwayat.
+
+    {
+      "data": {
+        "id": 1002,
+        "groupId": 12,
+        "description": "Makan malam",
+        "amount": 70000,
+        "mode": "EQUAL_SUBSET",
+        "status": "PENDING_APPROVAL",
+        "receiptStatus": "VERIFIED",
+        "itemsPhase": null,
+        "version": 1,
+        "payer": { "id": 4, "name": "Rey" },
+        "paidFromFund": false,
+        "hasReceipt": true,
+        "participantCount": 3,
+        "participants": null,
+        "myShare": { "amount": 23333, "consent": "PENDING" },
+        "approval": null,
+        "expiresAt": "2026-10-17T08:30:00.000Z",
+        "createdAt": "2026-10-10T08:30:00.000Z"
+      }
+    }
+
+Aturan:
+- participants bernilai null bila pemanggil tidak berhak melihat daftarnya (9.5). myShare bernilai null bila pemanggil bukan peserta.
+- itemsPhase hanya terisi pada mode ITEMIZED (CLAIMING atau FINALIZED).
+- paidFromFund true menampilkan Dana Kelompok tanpa nama pemegang (2.8).
+- Nama penalang, deskripsi, dan field teks lain adalah data tak tepercaya dan dirender sebagai teks biasa (2.2).
+
+### 9.2 Membuat, mengubah, dan mengirim
+
+| Endpoint | Fungsi |
+|---|---|
+| POST /api/groups/:groupId/transactions | Membuat transaksi berstatus DRAFT. 201. Penalang adalah pemanggil (payerId dari token, tidak dari body). |
+| PATCH /api/groups/:groupId/transactions/:transactionId | Mengubah DRAFT milik penalang. Body sama seperti pembuatan, semua field opsional. Perubahan nominal membatalkan hasil verifikasi struk dan receiptStatus kembali PENDING. |
+| DELETE /api/groups/:groupId/transactions/:transactionId | Menghapus DRAFT milik penalang. 204. Selain DRAFT: 409 invalid-state. |
+| POST /api/groups/:groupId/transactions/:transactionId/submit | Mengirim DRAFT dan menjalankan pemilihan jalur (architecture.md 7.2). 200 dengan { data: { transaction, approval } }. Approval bernilai null bila tidak ada. |
+
+Body pembuatan:
+
+    {
+      "description": "Makan malam",
+      "amount": 70000,
+      "mode": "EQUAL_SUBSET",
+      "participants": [{ "userId": 4 }, { "userId": 5 }, { "userId": 6 }]
+    }
+
+- EQUAL_ALL: participants tidak dikirim. Server memakai semua anggota ACTIVE pada saat submit.
+- EQUAL_SUBSET: daftar userId peserta. Penalang boleh menjadi peserta.
+- CUSTOM: daftar { userId, amount }. Jumlah semua amount harus sama dengan total.
+- ITEMIZED: tidak ada peserta. Hanya diperbolehkan dengan struk (K9).
+- Batas nominal Rp100.000.000 per transaksi (architecture.md 6.1). Pelanggaran: 400 validation-failed.
+
+Pembagian rata memakai largest remainder dengan tie-break userId menaik (G4), menggantikan aturan lama di splitMoney.js (sisa ke peserta awal). Contoh: Rp70.000 untuk peserta 4, 5, 6 menjadi Rp23.334, Rp23.333, Rp23.333 (total Rp70.000). Bagian penalang sendiri bukan utang: hanya peserta 5 dan 6 yang berutang Rp23.333 kepada pengguna 4.
+
+Submit:
+- Hanya penalang, hanya dari DRAFT. Lainnya: 403 forbidden atau 409 invalid-state.
+- ITEMIZED tanpa struk: 400 validation-failed. Struk sudah diunggah tetapi belum diverifikasi: 409 invalid-state dengan detail "verifikasi struk belum dijalankan".
+- Hasil submit menurut tabel 7.2: ACTIVE (CHARGE ditulis) atau PENDING_APPROVAL (dengan Approval bila ada, dan consent peserta bila subset atau CUSTOM). Pada mode ITEMIZED yang ACTIVE, kartu pilih item terbit (bagian 7).
+- Grup tanpa pemilih: ACTIVE langsung, dan satu baris riwayat dicatat (keputusan 2).
+
+### 9.3 Struk
+
+| Endpoint | Fungsi |
+|---|---|
+| POST .../transactions/:transactionId/receipt | Sudah ada. Hanya penalang, hanya saat DRAFT. Maks 5 MB, tipe dari byte awal. |
+| POST .../transactions/:transactionId/receipt/verify | Sudah ada. Hanya penalang, hanya saat DRAFT. Respons mengikuti 5.3 dan 5.4. |
+
+Tambahan:
+- Hash SHA-256 gambar identik dengan struk pada transaksi ACTIVE atau PENDING_APPROVAL di grup yang sama: 409 duplicate-receipt dengan field tambahan existingTransactionId. Struk dari transaksi yang REJECTED, EXPIRED, WITHDRAWN, atau TAKEN_DOWN boleh dipakai ulang. Cakupan hanya satu grup (K8).
+- Isi mirip (merchant, tanggal, total, dan jam) menghasilkan receiptStatus NEEDS_REVIEW dengan decision.reason possible-duplicate dan field warnings berisi existingTransactionId. Transaksinya masuk jalur Approval admin saat submit (K20).
+- Ekstraksi hasil verifikasi dibaca lewat GET .../transactions/:transactionId/extraction (anggota ACTIVE). Bentuknya mengikuti ReceiptExtraction (architecture.md 6.3) dan ditulis rinci setelah kontrak AI dengan Bintang disepakati.
+
+### 9.4 Daftar dan riwayat
+
+| Endpoint | Fungsi |
+|---|---|
+| GET /api/groups/:groupId/transactions | Daftar berkursor (2.5). Query: month (YYYY-MM, zona Asia/Jakarta, K24), status, mode, payerId, limit, cursor. DRAFT tidak muncul kecuali status=DRAFT, dan itu hanya milik pemanggil. |
+| GET /api/groups/:groupId/transactions/:transactionId | Detail satu transaksi. |
+| GET /api/me/history | Riwayat pribadi lintas grup, dari ledger. Query: month, groupId, limit, cursor. |
+
+Entri riwayat pribadi:
+
+    {
+      "id": 7001,
+      "kind": "CHARGE",
+      "direction": "I_OWE",
+      "amount": 23333,
+      "group": { "id": 12, "name": "Kos Melati" },
+      "transactionId": 1002,
+      "counterparty": { "id": 4, "name": "Rey" },
+      "createdAt": "2026-10-10T08:40:00.000Z"
+    }
+
+- kind bernilai CHARGE, REVERSAL, atau SETTLEMENT. direction bernilai I_OWE atau OWED_TO_ME. amount selalu positif.
+- Dana kelompok tampil sebagai Dana Kelompok tanpa id pemegang (2.8).
+- Mantan anggota hanya melihat entri ledger miliknya (keputusan 7).
+- Bulan dihitung dari Transaction.createdAt (K24).
+
+### 9.5 Siapa melihat daftar peserta (K23)
+
+| Keadaan | Penalang dan admin | Peserta | Anggota lain |
+|---|---|---|---|
+| Belum ACTIVE | Daftar lengkap dan status consent | Bagian sendiri, jumlah peserta | Jumlah peserta |
+| ACTIVE | Daftar lengkap | Daftar lengkap | Daftar lengkap |
+
+Server mengisi participants dan myShare sesuai tabel ini. Klien tidak menurunkannya sendiri.
+
+### 9.6 Revisi
+
+| Endpoint | Fungsi |
+|---|---|
+| POST .../transactions/:transactionId/revisions | Mengajukan revisi. |
+| GET .../transactions/:transactionId/revisions | Daftar revisi berkursor, memuat nilai lama dan baru. Anggota ACTIVE. |
+
+Body:
+
+    {
+      "baseVersion": 1,
+      "reason": "Total di struk ternyata Rp76.000",
+      "changes": {
+        "amount": 76000,
+        "participants": [{ "userId": 4 }, { "userId": 5 }, { "userId": 6 }]
+      }
+    }
+
+- reason dan baseVersion wajib. baseVersion tidak sama dengan versi terbaru: 409 version-conflict (2.7).
+- changes dapat memuat amount, description, participants, dan extraction (bentuknya mengikuti 9.3). Mengubah mode tidak diperbolehkan.
+- Hanya pada transaksi ACTIVE. Siapa boleh dan jalurnya mengikuti architecture.md 6.4: admin langsung berlaku (APPLIED), kecuali menyentuh tanggungannya sendiri (K6), atau admin sekaligus penalang, yang masuk Approval (ADMIN_OTHER, atau QUORUM_20 bila admin tunggal). Penalang non-admin hanya lewat Approval ADMIN_ANY.
+- Respons 201 berisi revisi dengan status APPLIED atau PENDING_APPROVAL (disertai approval).
+- Anggota yang tanggungannya naik menerima CONSENT_REQUEST dan harus setuju ulang (keputusan 4). Penurunan langsung berlaku. Kenaikan yang ditolak atau kedaluwarsa ditanggung penalang (K22).
+- Semua anggota menerima REVISION_NOTICE (6.2).
+- Pada ITEMIZED, revisi yang mengubah item memengaruhi klaim yang sudah DONE. Perilakunya ditulis bersama bentuk ekstraksi setelah kontrak AI disepakati.
+
+Revisi:
+
+    {
+      "data": {
+        "id": 301,
+        "transactionId": 1002,
+        "status": "APPLIED",
+        "baseVersion": 1,
+        "reason": "Total di struk ternyata Rp76.000",
+        "requestedBy": { "id": 3, "name": "Admin" },
+        "approval": null,
+        "oldValue": { "amount": 70000 },
+        "newValue": { "amount": 76000 },
+        "createdAt": "2026-10-10T09:00:00.000Z",
+        "appliedAt": "2026-10-10T09:00:00.000Z"
+      }
+    }
+
+Contoh: Rp70.000 menjadi Rp76.000 untuk tiga peserta. Bagian baru Rp25.334, Rp25.333, dan Rp25.333 (total Rp76.000). Kenaikan per orang Rp2.000.
+
+### 9.7 Penarikan dan takedown
+
+| Endpoint | Fungsi |
+|---|---|
+| POST .../transactions/:transactionId/withdraw | Penalang menarik pengajuannya selama PENDING_APPROVAL. Status menjadi WITHDRAWN, Approval menjadi CANCELLED, consent tertunda gugur. 200 dengan transaksi terbaru. |
+| POST .../transactions/:transactionId/takedown | Admin menurunkan transaksi ACTIVE. Body { reason, baseVersion }, keduanya wajib. |
+
+- Takedown mengubah status menjadi TAKEN_DOWN, membalik semua CHARGE terkait lewat REVERSAL, dan mengubah klaim item menjadi VOIDED (G5). Kelebihan bayar menjadi kredit ke pembayarnya (architecture.md 7.3).
+- Takedown oleh admin yang memiliki tanggungan pada transaksi itu mengurangi tanggungannya sendiri (K6). Respons 202 berisi { data: { approval } } dan transaksi baru diturunkan setelah admin lain menyetujui, atau lewat QUORUM_20 bila admin tunggal.
+- Transaksi bukan ACTIVE: 409 invalid-state.
+
+### 9.8 Kode error dan event
+
+| code | Status | Arti |
+|---|---|---|
+| duplicate-receipt | 409 | Gambar sama dengan struk transaksi aktif di grup. Berisi existingTransactionId. |
+
+Kode yang sudah ada dipakai untuk kondisi lain: version-conflict, invalid-state, forbidden, validation-failed, payload-too-large, dan unsupported-media-type.
+
+Event: memakai transaction:updated, approval:updated, dan notification:created (6.6). Tidak ada event untuk DRAFT. share:updated hanya ke user:<penalang> dan user:<peserta> (K23).
+
+<!-- akhir-bagian-api-7 -->
