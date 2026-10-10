@@ -76,6 +76,10 @@ Semua nilai ini disimpan di apps/backend/src/config/constants.js dan tidak ditul
 | Panjang maksimal pesan chat | 2000 karakter Unicode |
 | Batas pesan teks per pengguna per grup | 20 per menit (usulan) |
 | Batas gambar chat per pengguna per grup | 5 per 5 menit (usulan) |
+| Masa berlaku access token (setelah refresh token tersedia) | 15 menit (usulan) |
+| Masa berlaku refresh token | 30 hari sejak login, tidak diperpanjang oleh rotasi (usulan) |
+| Batas percobaan login | 10 per 15 menit per pasangan IP dan email, dan 50 per 15 menit per IP (usulan) |
+| Batas pendaftaran akun | 10 per jam per IP (usulan) |
 | Kuorum merata (lebih dari 50% pemilih) | floor(n / 2) + 1 |
 | Kuorum admin tunggal (20% pemilih) | min(5, max(1, ceil(n / 5))), dihitung dengan bilangan bulat |
 
@@ -889,3 +893,67 @@ Contoh: Dina memiliki activeSince 2026-10-10T09:00:00.000Z. Pesan pada 08:59:59 
 - Chatbot memperlakukan isi chat sebagai data tak tepercaya (bagian chatbot).
 
 <!-- akhir-bagian-10g -->
+
+### K42. Format error validasi lolos dari penggantian (koreksi atas 4.1)
+
+Masalah: validate.js membalas langsung dengan { error: "validation-error", details: [...] } tanpa melalui errorHandler. Kode validation-error tidak ada di tabel migrasi 4.1 (terlewat saat tabel itu ditulis dari pembacaan errorHandler dan service). Saat format error diganti ke RFC 9457, jalur ini akan tertinggal dengan format lama, dan daftar kesalahan per field tidak punya padanan.
+
+Perbaikan:
+- validate melempar HttpError dengan code validation-failed dan field errors, yaitu daftar { field, message } dengan field dari path zod yang digabung titik. Tidak ada lagi middleware yang menulis respons error sendiri. Semua error melewati satu errorHandler.
+- Tes memeriksa bahwa setiap respons non-2xx yang dapat dipicu (validasi, id salah, JSON rusak, token salah, berkas terlalu besar) bertipe application/problem+json.
+- Baris validation-error ditambahkan ke tabel 4.1.
+
+### K43. Pendaftaran membuka status email (mengoreksi klaim K29)
+
+Masalah: K29 melindungi endpoint undangan agar tidak dipakai menguji email terdaftar, dan menyatakan hal itu tidak terbuka. Klaim itu terlalu kuat. POST /api/auth/register mengembalikan 409 email-taken, sehingga siapa pun dapat menguji email terdaftar tanpa membuat grup. K29 hanya menutup satu jalur dari dua.
+
+Perbaikan:
+- Jalur register tidak dihilangkan. Menutupnya menuntut verifikasi email (pesan yang sama untuk email baru dan lama, lalu tautan ke pemilik email), yang di luar cakupan. Pengguna perlu tahu bahwa emailnya sudah dipakai.
+- Pendaftaran dan login dibatasi lajunya (K47).
+- Login membalas pesan yang sama untuk email tidak dikenal dan password salah, dan memakai hash palsu agar waktu respons tidak membedakan keduanya (sudah berjalan).
+- Risiko yang diterima: status email terdaftar dapat diuji dalam batas laju. Perlindungan K29 diperbaiki rumusannya: fitur undangan tidak dapat dipakai sebagai alat uji, tetapi pengujian lewat pendaftaran tetap mungkin.
+
+### K44. Validasi input akun
+
+- Password: panjang maksimum 72 byte UTF-8, bukan 72 karakter. bcrypt hanya memakai 72 byte pertama. Satu huruf e beraksen adalah 2 byte, jadi 36 huruf sama dengan 72 byte, dan emoji 4 byte hanya muat 18 buah. Skema zod yang memakai max(72) menghitung unit UTF-16, sehingga 36 emoji (panjang 72, tetapi 144 byte) lolos. Perilaku versi bcryptjs terpasang terhadap input lebih panjang dari 72 byte tidak diperiksa untuk dokumen ini. Perbaikan: validasi dengan Buffer.byteLength lebih kecil atau sama dengan 72, ditambah panjang minimum 8 karakter. Password tidak dipangkas.
+- Email: dipangkas dan diubah ke huruf kecil (sudah berjalan, dan penting untuk mencocokkan undangan, K29). Ditambah batas panjang maksimal 254 karakter.
+- Field phone dihapus dari registerSchema dan dari service register karena No. HP dibatalkan. Field yang tidak dikenal dibuang oleh zod.
+- Nama: dipangkas, 1 sampai 100 karakter (sudah berjalan). Teks nama adalah data tak tepercaya (2.2).
+
+### K45. Model token, dan hal yang sengaja tidak ada
+
+Token akses:
+- JWT berklaim sub, iat, dan exp, dengan algoritma dipaku HS256 pada penandatanganan dan verifikasi. Kode sekarang tidak menyebut algoritma, dan default versi terpasang tidak diperiksa.
+- requireAuth tidak membaca database. Konsekuensinya, penggantian password tidak mencabut token akses yang sudah beredar sampai kedaluwarsa. Setelah refresh token tersedia, masa berlakunya 15 menit, sehingga jendela risikonya 15 menit.
+- Variabel lingkungan JWT_EXPIRES_IN berubah dari 1h menjadi 15m pada Tahap 2.
+
+Yang sengaja tidak dibuat (keputusan produk, menunggu konfirmasi):
+- Penghapusan akun: akun dirujuk ledger dan riwayat, sehingga tidak dapat dihapus. Sama seperti grup.
+- Penggantian email: email adalah penghubung undangan (K29) dan belum diverifikasi. Mengganti email sama dengan mengambil alih undangan orang lain.
+- Pemulihan kata sandi: tidak ada. Pengguna yang lupa password tidak dapat memulihkan akunnya. Infrastruktur email sudah ada (outbox, SMTP), jadi ini kandidat Tahap 4 bila waktu ada. Risiko yang diterima sampai saat itu.
+
+Yang dibuat: penggantian password dengan password lama (14.4), yang mencabut semua refresh token (K46).
+
+### K46. Refresh token (Tahap 2)
+
+Tabel RefreshToken: id, userId, familyId (UUID), tokenHash (SHA-256 heksadesimal, unik), createdAt, expiresAt, usedAt, revokedAt, replacedByTokenId.
+
+- Token adalah 32 byte acak (crypto.randomBytes) yang dikodekan base64url. Hanya hash-nya yang disimpan.
+- Masa berlaku absolut 30 hari sejak login. Rotasi mewarisi expiresAt token sebelumnya, tidak memperpanjangnya, supaya sesi pasti berakhir.
+- Rotasi: setiap refresh yang sah menandai usedAt dan menerbitkan pasangan token baru dalam familyId yang sama. Penandaan atomik: UPDATE dengan syarat usedAt kosong, revokedAt kosong, dan expiresAt belum lewat, lalu periksa jumlah baris terdampak sama dengan 1.
+- Deteksi pemakaian ulang: token yang sudah usedAt dan dipakai lagi mencabut seluruh keluarga (revokedAt), dan jawabannya 401 refresh-reuse. Pengguna harus login ulang di perangkat itu. Maksudnya, token yang dicuri dan dipakai bersama pemilik asli terdeteksi.
+- Refresh bersamaan dari dua tab dianggap pemakaian ulang dan mengeluarkan pengguna. Karena itu klien wajib single-flight (satu permintaan refresh pada satu waktu, tab lain menunggu hasilnya).
+- Logout mencabut keluarga. Penggantian password mencabut semua keluarga milik pengguna. Respons penggantian password berisi pasangan token baru untuk perangkat yang melakukannya.
+- Pengiriman: refresh token dikirim dan diterima di body JSON, bukan cookie, karena domain penyebaran frontend dan API belum diketahui (cookie lintas situs butuh SameSite None dan penanganan CSRF). Akibatnya frontend menyimpan token, dan risiko XSS diterima. Mitigasi: CSP, tidak memakai dangerouslySetInnerHTML, dan semua teks pengguna dirender sebagai teks (2.2). Bila kelak frontend dan API satu situs, cookie httpOnly menjadi alternatif.
+- Baris RefreshToken yang kedaluwarsa dibersihkan job terjadwal (Tahap 4). Tabel ini bukan catatan audit dan boleh dihapus.
+- Aksi auth (login, refresh, logout, penggantian password) ditulis ke AuditLog tingkat pengguna tanpa groupId, atau log aplikasi, dengan alamat IP. Pilihan penyimpanannya ditetapkan saat implementasi dan tidak dijanjikan sebagai riwayat grup.
+
+### K47. Batas laju dan alamat IP di belakang proxy
+
+- Login: 10 percobaan per 15 menit per pasangan (IP, email), dan 50 per 15 menit per IP. Pasangan itu berarti paling banyak 40 percobaan per jam per pasangan. Pembatas per email saja tidak dipakai karena penyerang dapat mengunci akun korban dengan sengaja mengirim percobaan gagal.
+- Pendaftaran: 10 per jam per IP.
+- Refresh: 60 per 15 menit per IP. Penggantian password: 5 per 15 menit per pengguna. Semuanya usulan.
+- Di Azure App Service, Express melihat IP proxy kecuali trust proxy dikonfigurasi. Konfigurasi yang salah punya dua akibat: semua pengguna dianggap satu IP sehingga satu pembatas memblokir semua orang, atau header X-Forwarded-For yang dipalsukan membuat pembatas mudah dilewati. Jumlah lompatan proxy yang dipercaya diverifikasi saat penyebaran. Tes lokal memakai header langsung. Hal ini dicatat sebagai pekerjaan Tahap 4 yang tidak boleh dilewatkan.
+- Pembatas disimpan di memori proses (satu instance dulu). Tidak berlaku bila skala horizontal.
+
+<!-- akhir-bagian-10h -->

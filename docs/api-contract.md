@@ -22,7 +22,7 @@ Status: rancangan (Tahap 0). Belum ada endpoint baru yang dibuat. Bagian ini han
 
 ### 2.2 Autentikasi
 
-- Header Authorization: Bearer <token>. Token JWT berlaku 1 jam. Refresh token baru ada di Tahap 2, sehingga sampai saat itu pengguna login ulang setelah token habis.
+- Header Authorization: Bearer <token>. Access token berlaku 1 jam saat ini dan menjadi 15 menit setelah refresh token tersedia di Tahap 2 (bagian 14). Sampai saat itu pengguna login ulang setelah token habis.
 - Token tidak ada atau tidak valid: 401 dengan code unauthorized.
 - Bukan anggota ACTIVE grup, atau tidak berhak atas aksi: 403 dengan code forbidden. Aturan siapa boleh apa ada di architecture.md bagian 7.4.
 - Teks dari pengguna (chat, nama item dari struk, alasan revisi) adalah data tak tepercaya. Klien merender sebagai teks biasa dan tidak sebagai HTML.
@@ -172,6 +172,7 @@ Format lama: { error, message }. Format baru: RFC 9457 dengan code dan detail (b
 | Kode lama | Status lama | Kode baru | Status baru | Catatan |
 |---|---|---|---|---|
 | invalid-id | 400 | validation-failed | 400 | Diganti satu middleware bersama. |
+| validation-error | 400 | validation-failed | 400 | Field details diganti errors berisi { field, message }. Middleware validate.js menjawab langsung tanpa melalui errorHandler, jadi harus dialihkan supaya formatnya seragam (K42). |
 | invalid-upload | 400 | validation-failed | 400 | |
 | file-required | 400 | validation-failed | 400 | |
 | invalid-json | 400 | invalid-json | 400 | Tetap. |
@@ -226,7 +227,7 @@ Dibuat dari pembacaan res.json di controller. Frontend belum terhubung ke backen
 
 | Endpoint | Bentuk lama | Bentuk baru |
 |---|---|---|
-| GET /api/auth/me | { user } | { data: user } |
+| GET /api/auth/me | { user } | { data: user }, dipindah ke GET /api/me (bagian 14) |
 | POST /api/groups | 201, { group } | 201, { data: group } |
 | POST /api/groups/join | { group } | { data: group } |
 | GET /api/groups | { groups } | { data: [ ...groups ] } (tanpa page) |
@@ -248,8 +249,8 @@ Endpoint di bawah mengirim objek langsung tanpa pembungkus bernama. Dibuat dari 
 
 | Endpoint | Bentuk lama | Bentuk baru |
 |---|---|---|
-| POST /api/auth/register | 201, { user, token } | 201, { data: { user, token } } |
-| POST /api/auth/login | { user, token } | { data: { user, token } } |
+| POST /api/auth/register | 201, { user, token } | 201, { data: { user, accessToken, refreshToken, expiresIn } } (bagian 14) |
+| POST /api/auth/login | { user, token } | { data: { user, accessToken, refreshToken, expiresIn } } (bagian 14) |
 | POST .../transactions/:transactionId/receipt/verify | { transaction, decision, detected: { total, confidence } } | { data: { transaction, decision, detected: { total, confidence } } } |
 | GET /api/groups/:groupId/balances | Bentuk belum diperiksa | Dirancang ulang di bagian saldo (ledger append-only dan pelunasan bilateral, K3). Bukan sekadar dibungkus. |
 
@@ -277,7 +278,7 @@ Alasan keputusan (field decision.reason pada verifikasi struk). Nilai lama diper
 | arithmetic-mismatch | NEEDS_REVIEW | Item ditambah service, pajak (bila eksklusif), dan ongkir dikurangi diskon tidak sama dengan total. Baru. |
 | possible-duplicate | NEEDS_REVIEW | Isi mirip struk lain di grup yang sama (merchant, tanggal, total, jam). Perlu keputusan admin (K8). Baru. |
 
-Nilai constants.js lain untuk RECEIPT_STATUS belum diperiksa untuk dokumen ini.
+RECEIPT_STATUS di constants.js saat ini hanya berisi PENDING, VERIFIED, dan REJECTED.
 
 Saldo. getBalances saat ini menghitung semua transaksi tanpa melihat status struk, dan daftar anggotanya tidak menyaring status keanggotaan. Keduanya tidak dipertahankan: saldo yang baru dihitung dari LedgerEntry (architecture.md 6.2), dan CHARGE hanya ditulis setelah transaksi lolos. Pemeriksaan keseimbangan total yang sekarang berupa console.error dipertahankan sebagai pemeriksaan kesehatan.
 
@@ -1522,3 +1523,114 @@ Risiko yang diterima (architecture.md K41): pesan dan gambar tidak dapat ditarik
 Bagian ini tidak mengubah endpoint yang sudah berjalan karena chat belum ada di kode. Koleksi Postman menambah request chat setelah implementasi.
 
 <!-- akhir-bagian-api-11 -->
+
+## 14. Akun dan sesi
+
+### 14.1 Konsep dan objek
+
+- Awalan rute: /api/auth (daftar, masuk, token) dan /api/me (profil dan pengaturan sendiri). Endpoint /api/auth/register, /login, dan /refresh tidak butuh header Authorization. Endpoint auth tidak memakai Idempotency-Key: pendaftaran sudah dijaga keunikan email, dan login serta refresh tidak membuat catatan.
+- Ada dua token. accessToken adalah JWT yang dikirim pada header Authorization (2.2). refreshToken adalah token buram yang hanya dipakai pada endpoint refresh dan logout (architecture.md K46). Klien tidak membaca isi JWT.
+- Sebelum Tahap 2, refreshToken bernilai null dan expiresIn 3600. Sesudah Tahap 2, refreshToken terisi dan expiresIn 900. Klien menangani keduanya: bila refreshToken null, token habis berarti login ulang.
+- expiresIn dalam detik, sejak respons diterima.
+
+Respons daftar dan masuk:
+
+    {
+      "data": {
+        "user": { "id": 4, "email": "rey@example.com", "name": "Rey", "notifyByEmail": false, "createdAt": "2026-10-01T08:00:00.000Z" },
+        "accessToken": "<jwt>",
+        "refreshToken": null,
+        "expiresIn": 3600
+      }
+    }
+
+Objek user: { id, email, name, notifyByEmail, createdAt }. Email hanya dikirim kepada pemilik akun, tidak pernah kepada pengguna lain (architecture.md K33). Tidak ada phone. Pengguna lain tampil hanya sebagai { id, name }. Nama adalah data tak tepercaya dan dirender sebagai teks biasa (2.2).
+
+### 14.2 Daftar dan masuk
+
+| Endpoint | Fungsi |
+|---|---|
+| POST /api/auth/register | Body { email, password, name }. 201 dengan respons 14.1. |
+| POST /api/auth/login | Body { email, password }. 200 dengan respons 14.1. |
+
+Aturan (architecture.md K44):
+- email dipangkas, diubah ke huruf kecil, harus berformat email, maksimal 254 karakter. password minimal 8 karakter dan maksimal 72 byte UTF-8 (bukan 72 karakter), dan tidak dipangkas. name dipangkas dan 1 sampai 100 karakter. Pelanggaran: 400 validation-failed dengan errors per field.
+- Field lain yang dikirim, termasuk phone, diabaikan.
+- Email sudah terdaftar: 409 email-taken. Ini membuka status email terdaftar dan diterima sebagai risiko (K43).
+- Login dengan email tidak dikenal atau password salah: 401 invalid-credentials dengan pesan yang sama, dan waktu respons tidak membedakannya.
+- Pendaftaran tidak mengirim email verifikasi. Email belum diverifikasi, sehingga akun yang didaftarkan dengan email orang lain dapat menerima undangan yang ditujukan ke pemilik email aslinya (K29).
+
+### 14.3 Token (Tahap 2)
+
+| Endpoint | Fungsi |
+|---|---|
+| POST /api/auth/refresh | Body { refreshToken }. 200 dengan { data: { accessToken, refreshToken, expiresIn } }. Tanpa header Authorization. |
+| POST /api/auth/logout | Body { refreshToken }. 204. Tanpa header Authorization. Token tidak dikenal tetap 204. |
+
+Aturan:
+- Setiap refresh yang sah menerbitkan refresh token baru, dan token lama tidak berlaku lagi (rotasi, K46). Masa berlaku absolut 30 hari sejak login dan tidak diperpanjang oleh rotasi.
+- Refresh token tidak dikenal, kedaluwarsa, atau sudah dicabut: 401 invalid-refresh-token. Token yang sudah dipakai lalu dipakai lagi: 401 refresh-reuse, dan seluruh keluarga token dicabut. Pada kedua kasus, klien menghapus token tersimpan dan menampilkan layar login.
+- Logout mencabut seluruh keluarga token itu. Sebelum Tahap 2 tidak ada endpoint logout: klien cukup membuang token.
+
+Aturan klien (wajib):
+1. Klien hanya mencoba refresh ketika menerima 401 dengan code unauthorized (token akses tidak ada, tidak valid, atau kedaluwarsa). Kode invalid-credentials, invalid-refresh-token, dan refresh-reuse tidak memicu refresh.
+2. Refresh bersifat single-flight: hanya satu permintaan refresh pada satu waktu. Permintaan lain, termasuk dari tab lain, menunggu hasilnya. Dua refresh bersamaan dianggap pemakaian ulang dan mengeluarkan pengguna (K46).
+3. Setelah refresh berhasil, permintaan yang gagal diulang tepat satu kali dengan Idempotency-Key yang sama (2.6). Bila refresh gagal, klien menampilkan layar login.
+4. Koneksi Socket.IO yang diputus dengan alasan token-expired (3.1) disambung ulang dengan token baru setelah refresh, lalu klien mengambil ulang data yang tampil (3.3).
+
+<!-- akhir-bagian-api-12a -->
+
+### 14.4 Profil dan kata sandi
+
+| Endpoint | Fungsi |
+|---|---|
+| GET /api/me | Profil saya (objek user 14.1). Menggantikan GET /api/auth/me. |
+| PATCH /api/me | Body { name }. 200 dengan profil terbaru. Email tidak dapat diubah (architecture.md K45). |
+| POST /api/me/password | Body { currentPassword, newPassword }. 200 dengan { data: { accessToken, refreshToken, expiresIn } }. |
+
+Aturan:
+- Pengaturan notifikasi email ada di GET dan PATCH /api/me/notification-settings (6.2). Metode pembayaran ada di 10.3.
+- newPassword mengikuti aturan password 14.2. Password saat ini salah: 400 validation-failed dengan errors berisi { field: "currentPassword", message: "Password saat ini salah" }. Kode ini sengaja bukan 401, supaya klien tidak mencoba refresh.
+- Penggantian password mencabut semua refresh token pengguna di semua perangkat (K46) dan menerbitkan pasangan token baru untuk perangkat yang mengubahnya. Token akses lama di perangkat lain tetap berlaku sampai kedaluwarsa, paling lama 15 menit.
+- Penggantian password dibatasi 5 kali per 15 menit per pengguna (14.5).
+- Tidak ada penghapusan akun, penggantian email, atau pemulihan kata sandi (K45). Pengguna yang lupa password tidak dapat memulihkan akunnya sampai fitur itu ada.
+
+### 14.5 Batas laju
+
+Terlampaui: 429 rate-limited dengan header Retry-After (dalam detik).
+
+| Endpoint | Batas (usulan) | Dihitung per |
+|---|---|---|
+| POST /api/auth/login | 10 per 15 menit | Pasangan IP dan email |
+| POST /api/auth/login | 50 per 15 menit | IP |
+| POST /api/auth/register | 10 per jam | IP |
+| POST /api/auth/refresh | 60 per 15 menit | IP |
+| POST /api/me/password | 5 per 15 menit | Pengguna |
+
+Dua catatan (architecture.md K47):
+- Pembatas per email saja tidak dipakai karena penyerang dapat mengunci akun korban.
+- Di Azure App Service, alamat IP bergantung pada konfigurasi trust proxy. Konfigurasi yang salah membuat semua pengguna dianggap satu IP. Diverifikasi saat penyebaran.
+
+### 14.6 Kode error dan migrasi
+
+| code | Status | Arti |
+|---|---|---|
+| invalid-refresh-token | 401 | Refresh token tidak dikenal, kedaluwarsa, atau dicabut. |
+| refresh-reuse | 401 | Refresh token yang sudah dipakai dipakai lagi. Seluruh keluarga dicabut. |
+
+Kode yang sudah ada dipakai untuk kondisi lain: unauthorized, invalid-credentials, email-taken, validation-failed, dan rate-limited.
+
+Migrasi endpoint yang sudah berjalan:
+
+| Endpoint lama | Perubahan |
+|---|---|
+| POST /api/auth/register | Field phone dihapus. Password dihitung dalam byte. Email maksimal 254 karakter. Respons memakai bentuk 14.1: token menjadi accessToken, ditambah refreshToken dan expiresIn. |
+| POST /api/auth/login | Respons memakai bentuk 14.1. |
+| GET /api/auth/me | Dipindah ke GET /api/me. Respons { data: user } (5.2). |
+| Middleware validate | Menjawab lewat errorHandler dengan validation-failed dan errors (4.1 dan K42). |
+| Middleware requireAuth | Algoritma dipaku HS256 (K45). Pesan 401 tetap dengan code unauthorized. |
+| Skema User | Kolom phone dihapus (migrasi Tahap 0). Kolom notifyByEmail ditambah (K13). |
+
+Koleksi Postman (docs/postman/build.mjs) diperbarui mengikuti perubahan di atas.
+
+<!-- akhir-bagian-api-12 -->
