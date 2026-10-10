@@ -203,7 +203,7 @@ Saldo pasangan (debitur D, kreditur C) adalah SUM(sign x amount) atas entri deng
 
 **AuditLog** (append-only)
 
-id, groupId, actorId, entity, entityId, action (misalnya REVISE, TAKEDOWN, OVERRIDE_LEAVE, ROLE_CHANGE, FUND_MARK), oldValue (JSON), newValue (JSON), reason, createdAt. Alasan wajib untuk REVISE, TAKEDOWN, dan OVERRIDE_LEAVE (ditegakkan di service). Indeks (groupId, createdAt). Selisih hasil AI dan revisi admin untuk data akurasi dibaca dari tabel ReceiptExtraction versi, bukan dari tabel terpisah.
+id, groupId, actorId (kosong untuk sistem), transactionId (opsional), entity, entityId, action (misalnya REVISE, TAKEDOWN, OVERRIDE_LEAVE, ROLE_CHANGE, FUND_MARK), oldValue (JSON), newValue (JSON), reason, createdAt. Alasan wajib untuk REVISE, TAKEDOWN, dan OVERRIDE_LEAVE (ditegakkan di service). Indeks (groupId, createdAt). Selisih hasil AI dan revisi admin untuk data akurasi dibaca dari tabel ReceiptExtraction versi, bukan dari tabel terpisah.
 
 ### 6.3 Struk dan klaim item
 
@@ -417,7 +417,7 @@ Fase FINALIZE pada mode ITEMIZED (K4): setelah seluruh unit terklaim, atau penal
 
 | Dari | Ke | Pemicu |
 |---|---|---|
-| (baru) | OFFERED | Penalang menunjuk anggota atas item yang belum terpilih setelah 24 jam. |
+| (baru) | OFFERED | Penalang menunjuk anggota atas item yang masih tersisa, kapan saja (K17). |
 | OFFERED | ACCEPTED | Penunjukan pertama yang diterima, lewat UPDATE bersyarat atomik pada item. Item menjadi milik penerima dengan klaim DONE. |
 | OFFERED | DECLINED | Ditolak oleh yang ditunjuk. |
 | OFFERED | CANCELLED | Penunjukan lain atas item yang sama sudah ACCEPTED. |
@@ -580,7 +580,42 @@ Akibat: jumlah semua bagian, termasuk bagian penalang, tetap persis sama dengan 
 ### K16. Done, finalisasi, dan privasi event
 
 - Done dilakukan per pengguna per transaksi, bukan per item: semua baris HOLDING milik pengguna itu menjadi DONE sekaligus.
-- Finalisasi terjadi otomatis saat semua unit berstatus DONE (tanpa HOLDING dan tanpa penunjukan OFFERED). Bila ada unit yang tidak pernah diklaim, penalang dapat memfinalisasi setelah 24 jam, dan unit sisa menjadi bagian penalang sendiri (tidak menjadi utang). Ini memenuhi keputusan 6 tanpa menahan penulisan ongkir selamanya.
+- Finalisasi terjadi otomatis saat semua unit berstatus DONE. Penalang juga dapat memfinalisasi kapan saja (diubah oleh K18).
 - Event share:updated tidak disiarkan ke seluruh grup karena mengungkap siapa yang menolak. Event hanya dikirim ke penalang dan peserta bersangkutan. Apakah daftar consent terlihat oleh semua anggota diputuskan di bagian transaksi pada kontrak API.
 
 <!-- akhir-bagian-10 -->
+
+### K17. Penunjukan item oleh penalang dan batas kewenangan
+
+Masalah: K16 menetapkan unit yang tidak diklaim sebagai bagian penalang dan membatasi penunjukan setelah 24 jam. Kenyataannya, sisa itu bisa saja milik orang tertentu.
+
+Perbaikan:
+- Penalang dapat menunjuk anggota atas unit yang masih tersisa kapan saja. Angka 24 jam hanya menjadi penanda pengiriman notifikasi ITEM_UNCLAIMED. Ini memperluas keputusan 6.
+- Yang ditunjuk harus meng-ACC. Tanpa persetujuan, tidak ada utang yang tercipta (keputusan 4 dan 6 tetap berlaku).
+- Penunjukan tidak mencadangkan unit. Anggota yang lebih dulu berhasil memegang unit itu menang secara atomik, dan penunjukan menjadi gagal dengan item-unavailable.
+- Admin tidak dapat membebankan item kepada anggota tanpa persetujuan orang itu. Akibatnya, jika yang ditunjuk menolak, beban tetap pada penalang. Ini risiko yang diterima: penalang yang dirugikan menyelesaikannya secara sosial, dengan riwayat sebagai bukti.
+- Kewenangan admin terhadap penalang yang curang: membatalkan penunjukan yang masih OFFERED (alasan wajib), takedown, revisi (langsung berlaku kecuali menyentuh tanggungannya sendiri, K6), dan membaca riwayat. Semuanya tercatat.
+
+### K18. Penalang menutup pembagian kapan saja
+
+Perbaikan atas K16:
+- Penalang dapat memfinalisasi kapan saja selama fase CLAIMING. Pada saat itu: baris HOLDING milik anggota dilepas (RELEASED, pemilik diberi notifikasi ITEMS_CLOSED), penunjukan OFFERED menjadi CANCELLED, unit yang belum diklaim tidak menghasilkan utang siapa pun, dan ongkir ditulis (K4, G1).
+- Tidak ada endpoint membuka kembali. Membuka kembali berarti menulis ulang ongkir, dan jika satu orang melepas pilihannya, porsi ongkir orang lain naik tanpa persetujuan mereka (melanggar keputusan 4).
+- Koreksi setelah FINALIZED dilakukan lewat revisi: perubahan klaim ditulis REVERSAL ditambah CHARGE baru, orang yang tanggungannya naik wajib setuju ulang, dan klaim yang terkunci (K2) tidak dapat diubah.
+- Kolom baru pada Transaction: itemsPhase (CLAIMING atau FINALIZED), finalizedAt, finalizedBy (kosong berarti sistem).
+- Penalang yang menutup terlalu cepat menanggung sisa unit sendiri, sehingga anggota lain tidak dirugikan.
+
+### K19. Riwayat menyeluruh
+
+Masalah: ItemClaim, ItemAssignment, dan ApprovalVote adalah tabel kerja yang berubah. Pilihan HOLDING yang dibatalkan tidak menyentuh ledger, sehingga jejaknya hilang. AuditLog sebelumnya hanya mencatat sebagian aksi.
+
+Perbaikan:
+- Setiap aksi tulis oleh pengguna atau sistem menulis satu baris AuditLog dalam transaksi database yang sama dengan aksinya. Jika penulisan gagal, aksinya juga gagal.
+- actorId kosong berarti sistem (pelepasan hold otomatis, kedaluwarsa, finalisasi otomatis).
+- Alasan wajib hanya untuk aksi yang mengubah nilai atau membatalkan milik orang lain (REVISE, TAKEDOWN, OVERRIDE_LEAVE, pembatalan penunjukan oleh admin). Aksi rutin tidak memerlukan alasan.
+- Pelaku entri dana disamarkan (7.5 butir 4). Riwayat dapat dibaca semua anggota ACTIVE. Mantan anggota hanya melihat baris yang terkait ledger miliknya.
+- Penegakan: satu fungsi bersama untuk menulis AuditLog dipanggil oleh service, dan tes integrasi memeriksa bahwa tiap endpoint tulis menghasilkan baris riwayat.
+
+Batas jaminan: trigger database mencegah perubahan dan penghapusan lewat aplikasi. Pengelola database yang memiliki akses langsung masih dapat mengubah data. Rantai hash tidak dibuat. Laporan tidak boleh mengklaim riwayat kebal terhadap pengelola server.
+
+<!-- akhir-bagian-10b -->

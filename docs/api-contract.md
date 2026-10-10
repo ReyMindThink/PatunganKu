@@ -329,6 +329,7 @@ Aturan: type adalah string. Klien mengabaikan type dan field payload yang tidak 
 | PAYMENT_REQUEST | Kreditur | paymentId, sender, amount |
 | PAYMENT_DECIDED | Pengirim pelunasan | paymentId, status |
 | REMINDER | Debitur | creditor, amount |
+| ITEMS_CLOSED | Pemegang klaim yang dilepas saat penalang menutup | transactionId, closedBy, releasedItems |
 
 CONSENT_REQUEST menambah daftar tipe di architecture.md 6.4. Karena type berupa string, tidak ada perubahan skema.
 
@@ -473,7 +474,7 @@ Aturan:
 - phase bernilai CLAIMING atau FINALIZED. Ongkir pada myTotals bernilai null sampai FINALIZED (K4).
 - claimedQty menghitung unit HOLDING dan DONE. remainingQty adalah qty dikurangi claimedQty.
 - canClaim, canOffer, dan canFinalize dihitung server (seperti canVote di 6.3). Klien tidak menurunkannya sendiri.
-- offerableAt adalah 24 jam sejak kartu terbit. Sebelum itu penalang tidak dapat menunjuk anggota.
+- offerableAt adalah 24 jam sejak kartu terbit, saat penalang menerima notifikasi ITEM_UNCLAIMED. Penalang dapat menunjuk anggota kapan saja selama masih ada unit tersisa (K17).
 - Nama item berasal dari OCR dan merupakan data tak tepercaya. Klien merender sebagai teks biasa (2.2).
 - Asumsi: daftar claims (siapa mengambil apa) terlihat oleh semua anggota ACTIVE, sesuai kartu di chat.
 
@@ -496,13 +497,13 @@ Aturan:
 
 | Endpoint | Fungsi |
 |---|---|
-| POST /api/groups/:groupId/transactions/:transactionId/items/:itemId/assignments | Hanya penalang. Body { assigneeIds: [4, 5], qty: 1 }. Hanya setelah offerableAt dan bila remainingQty cukup. 201 dengan { data: [ ...assignments ] }. Satu panggilan membuat satu offerGroupId. |
+| POST /api/groups/:groupId/transactions/:transactionId/items/:itemId/assignments | Hanya penalang. Body { assigneeIds: [4, 5], qty: 1 }. Kapan saja selama remainingQty cukup (K17). 201 dengan { data: [ ...assignments ] }. Satu panggilan membuat satu offerGroupId. |
 | POST /api/groups/:groupId/assignments/:assignmentId/respond | Hanya yang ditunjuk. Body { decision: "ACCEPT" | "REJECT" }. |
 | POST /api/groups/:groupId/transactions/:transactionId/finalize | Hanya penalang. |
 
 Aturan:
 - ACCEPT bersifat atomik. Penerima pertama mendapat unit itu (klaim DONE dan CHARGE). Penunjukan lain dalam offerGroupId yang sama menjadi CANCELLED (keputusan 6). Menjawab penunjukan yang tidak lagi OFFERED: 409 invalid-state. Unit sudah diambil orang lain: 409 item-unavailable.
-- finalize hanya setelah offerableAt, tanpa baris HOLDING dan tanpa penunjukan OFFERED yang menggantung. Unit yang belum diklaim menjadi bagian penalang sendiri (tidak menjadi utang), lalu ongkir ditulis (K16). Jika syarat belum terpenuhi: 409 invalid-state dengan detail penghalangnya.
+- finalize oleh penalang dapat dilakukan kapan saja selama phase CLAIMING (K18, bagian 7.8).
 - Finalisasi juga terjadi otomatis saat semua unit DONE (7.4).
 - Pada offerableAt, penalang menerima notifikasi ITEM_UNCLAIMED (6.2). Yang ditunjuk menerima ITEM_OFFERED.
 
@@ -522,3 +523,60 @@ item:updated dikirim pada setiap perubahan jumlah unit (HOLDING, DONE, RELEASED)
 | claim-locked | 409 | Klaim DONE terkunci oleh pelunasan terkonfirmasi untuk pasangan pengutang-penalang (K2). |
 
 <!-- akhir-bagian-api-5 -->
+
+### 7.8 Penutupan oleh penalang dan koreksi (mengubah 7.3 sampai 7.5)
+
+Perubahan dari keputusan K17 dan K18 (architecture.md bagian 10):
+- Penunjukan anggota oleh penalang tidak lagi menunggu offerableAt. Penunjukan tidak mencadangkan unit: yang lebih dulu berhasil memegang unit menang, dan penunjukan yang kalah mendapat 409 item-unavailable.
+- finalize dapat dilakukan penalang kapan saja selama phase CLAIMING. Akibatnya, dalam satu transaksi database: baris HOLDING dilepas, penunjukan OFFERED menjadi CANCELLED, unit yang belum diklaim tidak menghasilkan utang, dan ongkir ditulis. phase menjadi FINALIZED, dengan finalizedAt dan finalizedBy pada transaksi.
+- Pemegang HOLDING yang dilepas menerima notifikasi ITEMS_CLOSED.
+- Tidak ada endpoint membuka kembali. Setelah FINALIZED, PUT .../claims/me dan POST .../claims/me/done menghasilkan 409 invalid-state. Koreksi klaim dilakukan lewat revisi (bagian revisi): perubahan ditulis REVERSAL ditambah CHARGE baru, anggota yang tanggungannya naik wajib setuju ulang, dan klaim yang terkunci (claim-locked) tidak dapat diubah.
+- canFinalize bernilai true bagi penalang selama phase CLAIMING.
+
+Endpoint tambahan:
+
+| Endpoint | Fungsi |
+|---|---|
+| POST /api/groups/:groupId/assignments/:assignmentId/cancel | Membatalkan penunjukan yang masih OFFERED. Boleh oleh penalang yang menunjuk, atau admin. Body { reason } wajib untuk admin dan opsional untuk penalang. Wajib Idempotency-Key. 200 dengan assignment terbaru. Penunjukan yang sudah diputuskan: 409 invalid-state. |
+
+Admin tidak memiliki endpoint untuk menetapkan item kepada anggota tanpa persetujuan orang itu (K17).
+
+## 8. Riwayat pergerakan
+
+### 8.1 Aturan
+
+- Setiap aksi tulis oleh pengguna atau sistem tercatat sebagai satu baris AuditLog dalam transaksi yang sama (architecture.md K19).
+- Riwayat tidak dapat diubah atau dihapus lewat API.
+- Semua anggota ACTIVE dapat membaca riwayat grupnya. Pelaku entri dana disamarkan (2.8). Mantan anggota hanya melihat baris yang terkait ledger miliknya.
+- actor bernilai null bila aksi dilakukan sistem.
+
+### 8.2 Membaca riwayat
+
+GET /api/groups/:groupId/audit, berkursor (2.5), terbaru lebih dulu.
+
+Query: entity, action, actorId, transactionId, from, to (ISO 8601), limit, cursor.
+
+    {
+      "data": [
+        {
+          "id": 9001,
+          "groupId": 12,
+          "transactionId": 1002,
+          "actor": { "id": 4, "name": "Rey" },
+          "entity": "ItemClaim",
+          "entityId": 55,
+          "action": "CLAIM_SET",
+          "oldValue": null,
+          "newValue": { "itemId": 31, "qty": 1, "status": "HOLDING" },
+          "reason": null,
+          "createdAt": "2026-10-10T08:35:00.000Z"
+        }
+      ],
+      "page": { "nextCursor": "abc123", "hasMore": true }
+    }
+
+Daftar action awal (dilengkapi di bagian lain): CLAIM_SET, CLAIM_DONE, CLAIM_RELEASE, HOLD_EXPIRED, ASSIGNMENT_OFFER, ASSIGNMENT_ACCEPT, ASSIGNMENT_DECLINE, ASSIGNMENT_CANCEL, ITEMS_FINALIZE, REVISE, TAKEDOWN, OVERRIDE_LEAVE, ROLE_CHANGE, FUND_MARK. Klien mengabaikan action yang tidak dikenal.
+
+Nilai oldValue, newValue, dan reason adalah data tak tepercaya dan dirender sebagai teks biasa (2.2).
+
+<!-- akhir-bagian-api-6 -->
