@@ -159,3 +159,102 @@ Server yang memutuskan apa yang boleh terlihat, bukan klien.
 - Aksi menulis (klaim item, Done, kirim pesan) tetap lewat REST dengan Idempotency-Key. Socket hanya untuk menyiarkan hasilnya, supaya satu jalur penulisan dan satu jalur validasi.
 
 <!-- akhir-bagian-api-1 -->
+
+## 4. Migrasi dari endpoint yang sudah berjalan
+
+Bagian ini mencatat perubahan yang diperlukan pada kode Tahap sebelumnya agar mengikuti konvensi di bagian 2 dan 3. Dibuat dari pembacaan kode backend yang ada.
+
+### 4.1 Pemetaan kode error
+
+Format lama: { error, message }. Format baru: RFC 9457 dengan code dan detail (bagian 2.3). Kode domain (yang tetap spesifik) boleh ditambahkan di luar tabel 2.3 bila klien perlu membedakannya untuk tampilan.
+
+| Kode lama | Status lama | Kode baru | Status baru | Catatan |
+|---|---|---|---|---|
+| invalid-id | 400 | validation-failed | 400 | Diganti satu middleware bersama. |
+| invalid-upload | 400 | validation-failed | 400 | |
+| file-required | 400 | validation-failed | 400 | |
+| invalid-json | 400 | invalid-json | 400 | Tetap. |
+| unauthorized | 401 | unauthorized | 401 | Tetap. |
+| invalid-credentials | 401 | invalid-credentials | 401 | Kode domain, tetap. |
+| user-not-found | 404 | unauthorized | 401 | Token valid tetapi user sudah tidak ada. Klien login ulang. |
+| forbidden | 403 | forbidden | 403 | Tetap. |
+| group-not-found | 404 | not-found | 404 | |
+| payment-not-found | 404 | not-found | 404 | |
+| transaction-not-found | 404 | not-found | 404 | |
+| email-taken | 409 | email-taken | 409 | Kode domain, tetap. |
+| already-member | 409 | already-member | 409 | Kode domain, tetap. |
+| already-decided | 409 | invalid-state | 409 | |
+| already-verified | 409 | invalid-state | 409 | |
+| no-receipt | 400 | invalid-state | 409 | Status HTTP berubah. Permintaan benar, status transaksi belum memungkinkan. |
+| invalid-receiver | 400 | invalid-receiver | 400 | Kode domain, tetap. |
+| file-too-large | 413 | payload-too-large | 413 | |
+| unsupported-type | 415 | unsupported-media-type | 415 | |
+| verifier-unavailable | 502 | upstream-error | 502 | |
+| code-generation-failed | 500 | internal-error | 500 | Detail asli hanya masuk log server. |
+| internal-error | 500 | internal-error | 500 | Tetap. |
+
+Empat kode domain tambahan di luar tabel 2.3: email-taken, already-member, invalid-credentials, dan invalid-receiver (empat, termasuk yang tetap dari tabel di atas).
+
+### 4.2 Perapian rute dan kode
+
+- Parameter rute grup diseragamkan menjadi :groupId (sebelumnya :id di rute grup). URL tidak berubah, hanya nama parameter di kode.
+- Pemeriksaan id (invalid-id) yang sekarang diulang di lima controller diganti satu middleware bersama yang menghasilkan validation-failed.
+- Koleksi Postman (docs/postman/build.mjs) diperbarui mengikuti format error baru dan status no-receipt yang berubah.
+
+<!-- akhir-bagian-api-2 -->
+
+## 5. Bentuk respons sukses
+
+### 5.1 Aturan
+
+Keputusan: semua respons sukses dibungkus data. Klien memiliki satu pola baca untuk semua endpoint.
+
+| Jenis | Bentuk |
+|---|---|
+| Satu objek | { "data": { ... } }. Objeknya langsung di dalam data, tanpa pembungkus bernama tambahan. |
+| Daftar kecil (selalu muat satu layar) | { "data": [ ... ] } |
+| Daftar yang bisa panjang | { "data": [ ... ], "page": { "nextCursor": "...", "hasMore": true } } (bagian 2.5) |
+| Aksi tanpa hasil (hapus, tandai dibaca) | 204 tanpa isi. |
+| Error | application/problem+json (bagian 2.3). Tidak pernah dibungkus data. |
+
+Respons yang menggabungkan beberapa hal (misalnya transaksi beserta hasil verifikasinya) tetap satu objek di dalam data, dengan field bernama yang jelas. Klien tidak boleh bergantung pada urutan field.
+
+### 5.2 Migrasi respons yang sudah berjalan
+
+Dibuat dari pembacaan res.json di controller. Frontend belum terhubung ke backend, sehingga perubahan ini belum merusak klien mana pun.
+
+| Endpoint | Bentuk lama | Bentuk baru |
+|---|---|---|
+| GET /api/auth/me | { user } | { data: user } |
+| POST /api/groups | 201, { group } | 201, { data: group } |
+| POST /api/groups/join | { group } | { data: group } |
+| GET /api/groups | { groups } | { data: [ ...groups ] } (tanpa page) |
+| GET /api/groups/:groupId | { group } | { data: group } |
+| POST /api/groups/:groupId/transactions | 201, { transaction } | 201, { data: transaction } |
+| GET /api/groups/:groupId/transactions | { transactions } (semua baris) | { data: [ ... ], page } (kursor) |
+| POST /api/groups/:groupId/payments | 201, { payment } | 201, { data: payment } |
+| PATCH /api/groups/:groupId/payments/:paymentId | { payment } | { data: payment } |
+| GET /api/groups/:groupId/payments | { payments } (semua baris) | { data: [ ... ], page } (kursor) |
+| POST .../transactions/:transactionId/receipt | { transaction } | { data: transaction } |
+
+Endpoint yang mengirim objek langsung tanpa pembungkus bernama (register, login, saldo, verifikasi struk) dipetakan setelah bentuknya diperiksa. Bagian itu ditambahkan sebagai 5.3.
+
+<!-- akhir-bagian-api-3 -->
+
+### 5.3 Respons objek langsung
+
+Endpoint di bawah mengirim objek langsung tanpa pembungkus bernama. Dibuat dari pembacaan controller dan service.
+
+| Endpoint | Bentuk lama | Bentuk baru |
+|---|---|---|
+| POST /api/auth/register | 201, { user, token } | 201, { data: { user, token } } |
+| POST /api/auth/login | { user, token } | { data: { user, token } } |
+| POST .../transactions/:transactionId/receipt/verify | { transaction, decision, detected: { total, confidence } } | { data: { transaction, decision, detected: { total, confidence } } } |
+| GET /api/groups/:groupId/balances | Bentuk belum diperiksa | Dirancang ulang di bagian saldo (ledger append-only dan pelunasan bilateral, K3). Bukan sekadar dibungkus. |
+
+Catatan:
+- user pada register dan login memakai bentuk user publik dari toPublicUser. Daftar field pastinya dicatat di bagian auth. Setelah migrasi Tahap 0, field phone tidak ada lagi.
+- Nilai decision pada verifikasi struk mengikuti utils/receiptDecision.js. Daftar nilainya ditulis di bagian struk setelah file itu dibaca.
+- Setelah migrasi ledger, hasil verifikasi juga menghasilkan versi ReceiptExtraction (architecture.md 6.3). Bentuk akhirnya ditulis di bagian struk.
+
+<!-- akhir-bagian-api-3b -->
