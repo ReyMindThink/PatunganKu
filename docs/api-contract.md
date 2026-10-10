@@ -669,7 +669,7 @@ Tambahan:
 |---|---|
 | GET /api/groups/:groupId/transactions | Daftar berkursor (2.5). Query: month (YYYY-MM, zona Asia/Jakarta, K24), status, mode, payerId, limit, cursor. DRAFT tidak muncul kecuali status=DRAFT, dan itu hanya milik pemanggil. |
 | GET /api/groups/:groupId/transactions/:transactionId | Detail satu transaksi. |
-| GET /api/me/history | Riwayat pribadi lintas grup, dari ledger. Query: month, groupId, limit, cursor. |
+| GET /api/me/history | Riwayat pribadi lintas grup, dari ledger. Query: month, groupId, counterpartyId, limit, cursor. |
 
 Entri riwayat pribadi:
 
@@ -766,3 +766,229 @@ Kode yang sudah ada dipakai untuk kondisi lain: version-conflict, invalid-state,
 Event: memakai transaction:updated, approval:updated, dan notification:created (6.6). Tidak ada event untuk DRAFT. share:updated hanya ke user:<penalang> dan user:<peserta> (K23).
 
 <!-- akhir-bagian-api-7 -->
+
+## 10. Pembayaran dan saldo
+
+### 10.1 Konsep
+
+- Saldo selalu dihitung dari LedgerEntry dan tidak disimpan (architecture.md 6.2 dan K25). Pihak ledger adalah pengguna atau Dana Kelompok. Dana tampil sebagai Dana Kelompok tanpa id pemegang (2.8).
+- Saldo pasangan dihitung per pasangan tak berurut: yang ditanggung A kepada B dikurangi yang ditanggung B kepada A. API menyajikannya dari sudut pandang anggota yang diminta.
+- Semua anggota ACTIVE melihat saldo grup dan rincian tiap anggota. Mantan anggota hanya melihat pasangan miliknya (keputusan 7).
+- Mantan anggota tetap dapat mengirim dan mengonfirmasi pelunasan selama saldonya tidak nol. Tidak ada akses chat.
+- Pelunasan dicatat per pasangan pengutang dan kreditur, bukan per transaksi (keputusan 10). Semua pelunasan bilateral. Tidak ada rekomendasi multilateral (K3).
+- Semua endpoint tulis di bagian ini wajib Idempotency-Key (2.6).
+
+### 10.2 Membaca saldo
+
+| Endpoint | Fungsi |
+|---|---|
+| GET /api/groups/:groupId/balances | Ringkasan semua anggota grup. Anggota ACTIVE. |
+| GET /api/groups/:groupId/balances/:userId | Rincian satu anggota ke tiap pihak. Nilai :userId boleh fund untuk Dana Kelompok. |
+| GET /api/me/balances | Ringkasan saya per grup, lintas grup. |
+
+Ringkasan grup:
+
+    {
+      "data": {
+        "members": [
+          { "party": { "kind": "USER", "id": 4, "name": "Rey", "membership": "ACTIVE" }, "owes": 30000, "owed": 5000, "balance": -25000 },
+          { "party": { "kind": "USER", "id": 5, "name": "Aqidatul", "membership": "ACTIVE" }, "owes": 10000, "owed": 30000, "balance": 20000 },
+          { "party": { "kind": "USER", "id": 6, "name": "Bintang", "membership": "ACTIVE" }, "owes": 5000, "owed": 10000, "balance": 5000 }
+        ]
+      }
+    }
+
+- owes adalah total yang ditanggung anggota itu kepada pihak lain. owed adalah total yang ditanggung pihak lain kepadanya. balance adalah owed dikurangi owes (negatif berarti berutang secara bersih).
+- Jumlah seluruh balance dalam satu grup selalu nol. Baris Dana Kelompok memakai kind FUND dan nama Dana Kelompok.
+- Anggota LEFT atau REMOVED hanya muncul bila saldonya tidak nol (membership menjadi LEFT atau REMOVED, tampil sebagai mantan anggota).
+
+Rincian satu anggota (X):
+
+    {
+      "data": {
+        "party": { "kind": "USER", "id": 4, "name": "Rey", "membership": "ACTIVE" },
+        "owes": 30000,
+        "owed": 5000,
+        "counterparties": [
+          {
+            "party": { "kind": "USER", "id": 5, "name": "Aqidatul", "membership": "ACTIVE" },
+            "amount": 30000,
+            "direction": "X_OWES",
+            "breakdown": { "group": 10000, "individual": 40000, "settled": -20000 },
+            "pendingPayments": 10000,
+            "payable": 20000
+          },
+          {
+            "party": { "kind": "USER", "id": 6, "name": "Bintang", "membership": "ACTIVE" },
+            "amount": 5000,
+            "direction": "X_IS_OWED",
+            "breakdown": { "group": -5000, "individual": 0, "settled": 0 },
+            "pendingPayments": 0,
+            "payable": 0
+          }
+        ]
+      }
+    }
+
+Aturan:
+- amount selalu nol atau positif. direction bernilai X_OWES (X berutang kepada pihak itu), X_IS_OWED, atau SETTLED.
+- breakdown ditulis dari sudut pandang X sebagai pengutang: nilai positif menambah utang X. group dan individual adalah jumlah CHARGE dan REVERSAL per kategori (GROUP untuk biaya merata, INDIVIDUAL untuk biaya per item). settled adalah jumlah pelunasan: pembayaran oleh X bernilai negatif, pembayaran oleh pihak lawan bernilai positif. Jumlah group, individual, dan settled menghasilkan angka bersih, dan amount adalah nilai mutlaknya.
+- pendingPayments dan payable hanya terisi bila X adalah pemanggil, selain itu null. pendingPayments adalah total pelunasan PENDING dari pemanggil kepada pihak itu. payable adalah amount dikurangi pendingPayments (nol bila direction bukan X_OWES). Dari contoh: 30000 dikurangi 10000 menghasilkan 20000.
+- Hanya pihak dengan saldo tidak nol yang ditampilkan, diurutkan dari amount terbesar.
+- Baris ledger di balik angka ini dibaca lewat GET /api/me/history dengan query groupId dan counterpartyId (9.4). Pemanggil hanya dapat membaca baris miliknya sendiri.
+
+Ringkasan saya lintas grup:
+
+    {
+      "data": {
+        "totals": { "owes": 30000, "owed": 5000, "balance": -25000 },
+        "groups": [
+          { "group": { "id": 12, "name": "Kos Melati" }, "owes": 30000, "owed": 5000, "balance": -25000 }
+        ]
+      }
+    }
+
+### 10.3 Metode pembayaran
+
+Metode milik pengguna sendiri:
+
+| Endpoint | Fungsi |
+|---|---|
+| GET /api/me/payment-methods | Daftar metode saya (aktif dan nonaktif). |
+| POST /api/me/payment-methods | Menambah metode. Body { kind, provider, accountNo, accountName }. Untuk kind CASH, hanya kind yang dikirim. 201. |
+| PATCH /api/me/payment-methods/:methodId | Mengubah provider, accountNo, atau accountName. |
+| DELETE /api/me/payment-methods/:methodId | Menonaktifkan metode. 204. Menonaktifkan metode aktif terakhir: 409 last-payment-method. |
+
+Metode:
+
+    { "id": 21, "kind": "EWALLET", "provider": "Dana", "accountName": "Aqidatul I.", "accountNo": "081200000000", "isActive": true }
+
+Aturan:
+- kind bernilai BANK, EWALLET, atau CASH. Untuk BANK dan EWALLET, provider, accountNo, dan accountName wajib. Batas panjang dan format divalidasi dengan zod (nilainya ditetapkan saat implementasi).
+- accountNo disimpan terenkripsi (architecture.md 6.5) dan tidak pernah masuk konteks chatbot.
+- Metode yang dinonaktifkan tidak dihapus (riwayat pelunasan masih merujuknya).
+- Minimal satu metode aktif ditegakkan saat penalang mengirim transaksi: 409 payment-method-required (K26). Pengguna yang menolak tunai cukup tidak memiliki metode CASH.
+
+Metode pihak lain dan pengaturan grup:
+
+| Endpoint | Fungsi |
+|---|---|
+| GET /api/groups/:groupId/members/:userId/payment-methods | Metode aktif milik anggota, hanya jenis yang diizinkan grup. |
+| GET /api/groups/:groupId/payment-settings | { data: { allowedKinds: [] } }. Daftar kosong berarti semua jenis. Semua anggota ACTIVE. |
+| PUT /api/groups/:groupId/payment-settings | Body { allowedKinds: ["BANK", "EWALLET"] }. Hanya admin. |
+
+- Nomor rekening hanya dibuka bila pemanggil adalah pemilik, atau pemanggil berutang kepada pemilik (direction X_OWES pada rincian 10.2, termasuk mantan anggota). Selain itu 403 forbidden.
+- Pemegang dana boleh melihat metode kreditur bila dana berutang kepada kreditur itu, sebagai pelunasan atas nama dana (architecture.md 6.5 dan 8.1).
+
+### 10.4 Pelunasan
+
+| Endpoint | Fungsi |
+|---|---|
+| POST /api/groups/:groupId/payments | Mengirim pelunasan (multipart/form-data). 201. |
+| GET /api/groups/:groupId/payments | Daftar pelunasan saya (dikirim dan diterima), berkursor (2.5). Query: role (sent atau received), status, limit, cursor. |
+| GET /api/groups/:groupId/payments/:paymentId | Detail. Hanya pengirim dan penerima. |
+| POST /api/groups/:groupId/payments/:paymentId/confirm | Penerima mengonfirmasi. Menulis SETTLEMENT. |
+| POST /api/groups/:groupId/payments/:paymentId/reject | Penerima menolak. Body opsional { reason }. |
+| POST /api/groups/:groupId/payments/:paymentId/cancel | Pengirim membatalkan selama PENDING. |
+| GET /api/groups/:groupId/payments/:paymentId/proof | Mengalirkan gambar bukti. Hanya pengirim dan penerima. |
+
+Body pembuatan (multipart/form-data):
+
+| Field | Keterangan |
+|---|---|
+| receiverId | Wajib. Id pengguna penerima. |
+| amount | Wajib. Bilangan bulat positif. Tidak boleh melebihi payable (10.2). |
+| methodType | Wajib. BANK, EWALLET, atau CASH. |
+| methodId | Wajib untuk BANK dan EWALLET: salah satu metode aktif milik penerima. |
+| note | Opsional. |
+| onBehalfOfFund | Opsional, bernilai true hanya untuk pemegang dana. Pelunasan atas nama Dana Kelompok. |
+| proof | Berkas gambar. Wajib kecuali methodType CASH. Maksimal 5 MB. Tipe divalidasi dari byte awal (JPEG, PNG, atau WebP). Disimpan di container proofs. |
+
+Objek pelunasan:
+
+    {
+      "data": {
+        "id": 801,
+        "groupId": 12,
+        "sender": { "kind": "USER", "id": 4, "name": "Rey" },
+        "receiver": { "kind": "USER", "id": 5, "name": "Aqidatul" },
+        "amount": 10000,
+        "methodType": "EWALLET",
+        "method": { "id": 21, "provider": "Dana", "accountName": "Aqidatul I." },
+        "note": null,
+        "hasProof": true,
+        "status": "PENDING",
+        "rejectReason": null,
+        "createdAt": "2026-10-10T09:00:00.000Z",
+        "decidedAt": null,
+        "cancelledAt": null
+      }
+    }
+
+Aturan:
+- Status mengikuti architecture.md 7.3: PENDING, lalu CONFIRMED, REJECTED, atau CANCELLED.
+- Nominal tidak boleh melebihi payable saat pengajuan, dan diperiksa ulang saat konfirmasi (K25). Jika saldo berubah sehingga nominal melebihi sisa utang: 409 amount-exceeds-debt. Penerima menolak, atau pengirim membatalkan lalu mengajukan ulang. Contoh: saldo 30000 dan pelunasan PENDING 10000. Pengajuan 25000 ditolak karena sisanya 20000.
+- Bukti tidak ada untuk methodType selain CASH: 400 validation-failed. Berkas lebih dari 5 MB: 413 payload-too-large. Tipe tidak sesuai: 415 unsupported-media-type.
+- Metode di luar jenis yang diizinkan grup, atau penerima tidak punya metode yang sesuai: 409 no-accepted-method (K26).
+- Mengirim ke diri sendiri atau ke pihak yang tidak berutang: 400 invalid-receiver. Pihak lawan bukan pemilik saldo positif: 409 amount-exceeds-debt.
+- Konfirmasi menulis satu LedgerEntry SETTLEMENT (sign negatif, debitur pengirim, kreditur penerima, paymentId terisi). Pada pelunasan atas nama dana, debitur adalah Dana Kelompok. Waktu konfirmasi menjadi acuan kunci pilihan item (K2).
+- Pengirim yang bukan pemegang dana tidak boleh mengirim onBehalfOfFund: 403 forbidden.
+- Penerima, pengirim, dan admin melihat nama pemegang dana pada pelunasan atas nama dana. Anggota lain melihat Dana Kelompok (architecture.md 8.1, pengecualian yang diterima).
+- Mantan anggota boleh mengirim, mengonfirmasi, dan membaca pelunasannya sendiri.
+- Berkas bukti dikirim dengan Cache-Control private dan no-store.
+
+Batasan yang diterima: pelunasan PENDING tidak kedaluwarsa otomatis. Jika kreditur tidak merespons, pengirim hanya dapat membatalkan dan menyelesaikannya secara sosial. Tidak ada mediasi admin.
+
+### 10.5 Pengingat
+
+| Endpoint | Fungsi |
+|---|---|
+| POST /api/groups/:groupId/reminders | Body { debtorId }. Hanya kreditur yang memiliki saldo positif dari debitur itu. 201. |
+| GET /api/groups/:groupId/reminders/status | Query debtorId. Untuk mengaktifkan atau menonaktifkan tombol di klien. |
+
+Respons pengiriman:
+
+    { "data": { "id": 61, "sentAt": "2026-10-10T09:00:00.000Z", "remaining": 2, "nextAllowedAt": "2026-10-10T21:00:00.000Z" } }
+
+Status:
+
+    { "data": { "count": 1, "remaining": 2, "nextAllowedAt": "2026-10-10T21:00:00.000Z", "canSend": false } }
+
+Aturan:
+- Jeda 12 jam dan maksimal tiga kali per siklus utang (architecture.md 4 dan K27). Dari contoh: pengingat pertama dikirim 09:00 UTC, sisa dua kali, dan berikutnya baru boleh pada 21:00 UTC.
+- Dalam jeda: 429 reminder-cooldown dengan header Retry-After. Batas tiga kali tercapai: 409 reminder-limit. Tidak ada utang: 409 invalid-state.
+- Penulisan Reminder, EmailOutbox, dan Notification REMINDER terjadi dalam satu transaksi database.
+- Email dikirim atas nama aplikasi dan memuat nama kreditur, nama grup, dan nominal. Tidak memuat email kreditur maupun nomor rekening. Email tetap dikirim terlepas dari User.notifyByEmail (K27).
+- Debitur mantan anggota yang masih berutang tetap dapat diingatkan.
+
+### 10.6 Event dan kode error
+
+| Event | Room | Muatan |
+|---|---|---|
+| balances:changed | group:<id> | { groupId, serverTime } |
+| payment:updated | user:<pengirim> dan user:<penerima> | { paymentId, groupId, status, serverTime } |
+
+Detail pelunasan bersifat pribadi sehingga tidak disiarkan ke seluruh grup. Klien memperbarui saldo dengan mengambil ulang endpoint 10.2 setelah menerima balances:changed.
+
+| code | Status | Arti |
+|---|---|---|
+| payment-method-required | 409 | Penalang belum punya metode pembayaran aktif saat mengirim transaksi (K26). |
+| last-payment-method | 409 | Tidak dapat menonaktifkan metode aktif terakhir. |
+| no-accepted-method | 409 | Tidak ada irisan antara jenis yang diizinkan grup dan metode milik penerima. |
+| reminder-cooldown | 429 | Pengingat dalam jeda 12 jam. Disertai Retry-After. |
+| reminder-limit | 409 | Batas tiga pengingat per siklus utang tercapai. |
+
+Kode yang sudah ada dipakai untuk kondisi lain: amount-exceeds-debt, invalid-receiver, invalid-state, forbidden, validation-failed, payload-too-large, dan unsupported-media-type.
+
+### 10.7 Migrasi endpoint pelunasan dan saldo yang sudah berjalan
+
+| Endpoint lama | Perubahan |
+|---|---|
+| POST /api/groups/:groupId/payments (JSON, receiverId dan amount) | Menjadi multipart dengan methodType, methodId, dan proof (10.4). |
+| PATCH /api/groups/:groupId/payments/:paymentId | Diganti tiga endpoint aksi: confirm, reject, cancel. |
+| GET /api/groups/:groupId/payments | Berkursor dengan filter role dan status (2.5). |
+| GET /api/groups/:groupId/balances | Bentuk baru (10.2). suggestSettlements dihapus (K3). Saldo dihitung dari LedgerEntry. |
+
+Koleksi Postman (docs/postman/build.mjs) diperbarui mengikuti perubahan di atas.
+
+<!-- akhir-bagian-api-8 -->

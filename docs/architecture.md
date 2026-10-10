@@ -167,7 +167,7 @@ Perbaikan: FundEntry punya contributorId (opsional). Pemegang dana tidak bisa ke
 | Tabel | Kolom dan perubahan |
 |---|---|
 | User | id, email (unik), passwordHash, name, notifyByEmail (default false), createdAt. Kolom phone dihapus. |
-| Group | id, name, code (unik), createdBy, createdAt. Tambah codeHidden (default false), joinRequiresApproval (default false), settleSimplify (default true). |
+| Group | id, name, code (unik), createdBy, createdAt. Tambah codeHidden (default false), joinRequiresApproval (default false). |
 | GroupMember | id, groupId, userId, role (OWNER, ADMIN, MEMBER), status (PENDING, ACTIVE, LEFT, REMOVED), joinedAt, leftAt, leftReason. Unik (groupId, userId). Baris tidak pernah dihapus. Anggota yang bergabung kembali memakai baris yang sama (status kembali ACTIVE, riwayat di AuditLog). Filtered unique index: satu OWNER aktif per grup (role OWNER dan status ACTIVE). |
 | Transaction | id, groupId, payerId (penalang), description, amount, mode (EQUAL_ALL, EQUAL_SUBSET, CUSTOM, ITEMIZED), status (DRAFT, PENDING_APPROVAL, ACTIVE, REJECTED, EXPIRED, WITHDRAWN, TAKEN_DOWN), receiptUrl, receiptStatus (PENDING, VERIFIED, FAILED, NEEDS_REVIEW), imageSha256, fingerprint, paidFromFund, version, expiresAt, itemsPhase (CLAIMING, FINALIZED), finalizedAt, finalizedBy, createdAt. Indeks (groupId, imageSha256) dan (groupId, fingerprint). |
 | TransactionSplit | Dihapus, diganti TransactionShare. |
@@ -456,7 +456,7 @@ Otorisasi ditegakkan di service, bukan di klien (prinsip 5). Setiap rute memerik
 |---|---|---|---|---|
 | Melihat grup, anggota, riwayat transaksi | ya | ya | ya | Hanya anggota ACTIVE. Non-anggota mendapat 403. |
 | Melihat kode grup | ya | ya | bila tidak disembunyikan | Bergantung Group.codeHidden. |
-| Mengubah pengaturan grup (kode tersembunyi, persetujuan gabung, sederhanakan, metode pembayaran grup) | ya | ya | tidak | |
+| Mengubah pengaturan grup (kode tersembunyi, persetujuan gabung, metode pembayaran grup) | ya | ya | tidak | |
 | Menyetujui atau menolak anggota PENDING, menambah anggota via email terdaftar | ya | ya | tidak | |
 | Mengeluarkan anggota | ya | hanya MEMBER | tidak | Syarat saldo nol atau override. K12. |
 | Mengangkat atau menurunkan admin, memindahkan kepemilikan | ya | tidak | tidak | Keputusan 1. |
@@ -633,7 +633,7 @@ Perbaikan:
 - Struk tidak dapat ditambahkan sesudah submit. Penalang membuat transaksi baru bila perlu.
 - Kecocokan isi struk (K8) mengubah jalur: struk VERIFIED yang berstatus possible-duplicate diperlakukan seperti NEEDS_REVIEW, jadi masuk Approval admin.
 
-### K21. Mode CUSTOM dipertahankan (usulan, menunggu konfirmasi)
+### K21. Mode CUSTOM dipertahankan
 
 Masalah: kode yang sudah berjalan mendukung pembagian CUSTOM (nominal per orang, jumlah harus sama dengan total), tetapi spesifikasi final hanya menyebut tiga mode.
 
@@ -666,3 +666,38 @@ Perbaikan:
 Riwayat bulanan dikelompokkan menurut Asia/Jakarta (UTC+7), bukan UTC. Waktu tetap disimpan UTC. Contoh: transaksi pada 1 November 00:30 WIB tersimpan sebagai 31 Oktober 17:30 UTC dan tetap masuk November. Pengelompokan memakai Transaction.createdAt, bukan tanggal pembelian di struk (ReceiptExtraction.purchasedAt), supaya satu transaksi tidak berpindah bulan ketika hasil baca struk direvisi. Zona waktu disimpan sebagai konstanta.
 
 <!-- akhir-bagian-10c -->
+
+### K25. Saldo per pasangan tak berurut (menggantikan 6.2 dan mengubah K3)
+
+Masalah: bagian 6.2 mendefinisikan saldo pasangan secara searah dan menyebut hasil negatif sebagai kredit ke arah sebaliknya. Pelunasan ke arah sebaliknya itu mengurangi saldo arah yang berbeda, sehingga angka tidak kembali ke nol. Contoh: A berutang ke B Rp50.000 dan sudah melunasi, lalu transaksinya diturunkan. Saldo A ke B menjadi minus Rp50.000. Saat B membayar kembali ke A, pelunasan itu tercatat sebagai pengurangan saldo B ke A, sedangkan saldo A ke B tetap minus Rp50.000. Kredit dari takedown atau revisi yang menurunkan nominal pasti terjadi, sehingga pendekatan searah tidak dapat dipertahankan.
+
+Perbaikan:
+- d(X ke Y) adalah jumlah sign dikali amount atas LedgerEntry dengan debitur X dan kreditur Y.
+- Saldo pasangan N(A, B) adalah d(A ke B) dikurangi d(B ke A). Positif berarti A berutang kepada B. Nol berarti lunas.
+- Pelunasan dari A ke B hanya sah bila N(A, B) lebih besar dari nol dan nominalnya tidak melebihi N dikurangi total pelunasan A ke B yang masih PENDING. Pemeriksaan dilakukan dalam transaksi database dengan kunci pada pasangan, dan diulang saat konfirmasi.
+- Netting dua arah menjadi bawaan. Tombol sederhanakan dan kolom Group.settleSimplify dihapus. Rekomendasi multilateral tetap tidak ada (K3).
+- Rincian asli per kreditur tetap ditampilkan: untuk tiap pihak, pecahan biaya grup, biaya individu, dan pelunasan, serta daftar baris ledger. Yang berubah hanya angka utamanya: angka bersih.
+- Total saldo bersih seluruh pihak dalam satu grup harus nol. Pemeriksaan keseimbangan di 5.4 dipertahankan.
+
+Contoh: A menanggung Rp50.000 kepada B, B menanggung Rp20.000 kepada A. N(A, B) adalah Rp30.000. Setelah A melunasi Rp30.000, N menjadi nol.
+
+Dampak: kunci pilihan item (K2) memakai waktu konfirmasi pelunasan terakhir pada pasangan pengutang dan penalang. Dana kelompok adalah pihak ledger yang berperan sebagai debitur atau kreditur dalam pasangan, dengan aturan yang sama.
+
+### K26. Metode pembayaran: kapan wajib dan metode yang diterima grup
+
+Masalah: spesifikasi menyatakan profil wajib berisi minimal satu metode, tetapi tidak menyebut kapan ditegakkan. Menegakkannya saat registrasi menghambat orang yang hanya berutang. Pembatasan jenis metode oleh grup juga dapat menyisakan penerima tanpa metode yang diterima.
+
+Perbaikan:
+- Minimal satu metode aktif ditegakkan pada dua titik: saat penalang mengirim transaksi (submit), dan saat menonaktifkan metode terakhir. Pelanggaran memberi 409 payment-method-required dan 409 last-payment-method.
+- Penolakan tunai berarti tidak memiliki metode CASH. Pengguna yang menolak tunai wajib memiliki bank atau dompet digital.
+- Pelunasan hanya boleh dengan jenis metode yang diizinkan grup (GroupPaymentSetting.allowedKinds kosong berarti semua) dan yang dimiliki penerima. Bila tidak ada irisan: 409 no-accepted-method.
+- Nomor rekening hanya dibuka kepada pengutang yang memiliki saldo positif ke penerima. Bagian 8.1 berlaku untuk pelunasan atas nama dana.
+
+### K27. Pengingat: siklus utang dan email
+
+- Siklus utang adalah masa sejak N pasangan terakhir bernilai nol atau berbalik arah. Maksimal tiga pengingat per siklus, dengan jeda 12 jam (konstanta di bagian 4). Siklus dihitung dari ledger saat permintaan, tanpa kolom khusus. Rincian implementasi ditentukan di Tahap 1.
+- Pengingat adalah aksi eksplisit kreditur sehingga email tetap dikirim tanpa memperhatikan User.notifyByEmail. Notifikasi dalam aplikasi (REMINDER) juga dibuat.
+- Isi email memuat nama kreditur, nama grup, dan nominal. Tidak memuat email kreditur maupun nomor rekening.
+- Pengingat hanya dapat dikirim kepada debitur dengan N positif kepada pengirim, termasuk mantan anggota yang masih berutang.
+
+<!-- akhir-bagian-10d -->
