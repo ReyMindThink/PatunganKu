@@ -120,7 +120,7 @@ Semua endpoint daftar yang bisa panjang memakai kursor, bukan nomor halaman, sup
 
 Dobel-tap atau percobaan ulang jaringan tidak boleh menulis entri ledger dua kali.
 
-- Header Idempotency-Key berisi UUID v4 yang dibuat klien untuk tiap niat aksi. Wajib untuk: pembuatan transaksi, penandaan Done dan klaim item, pengiriman pelunasan, konfirmasi pelunasan, pemberian suara Approval, penandaan dibayar dana, dan penambahan dana. Tanpa header: 400 dengan code validation-failed.
+- Header Idempotency-Key berisi UUID v4 yang dibuat klien untuk tiap niat aksi. Wajib untuk: pembuatan transaksi, penandaan Done dan klaim item, pengiriman pelunasan, konfirmasi pelunasan, pemberian suara Approval, consent peserta, penandaan dibayar dana, dan penambahan dana. Tanpa header: 400 dengan code validation-failed.
 - Kunci disimpan per pengguna selama 24 jam (konstanta di constants.js). Permintaan ulang dengan kunci, metode, dan path yang sama mengembalikan respons tersimpan dan header Idempotent-Replay: true.
 - Kunci sama dengan isi permintaan berbeda: 409 idempotency-key-reuse. Permintaan pertama masih berjalan: 409 request-in-progress.
 
@@ -258,3 +258,149 @@ Catatan:
 - Setelah migrasi ledger, hasil verifikasi juga menghasilkan versi ReceiptExtraction (architecture.md 6.3). Bentuk akhirnya ditulis di bagian struk.
 
 <!-- akhir-bagian-api-3b -->
+
+### 5.4 Catatan dari pembacaan kode saldo dan keputusan struk
+
+Status struk. Kode lama memakai RECEIPT_STATUS.REJECTED untuk struk yang gagal. Di rancangan, Transaction.status = REJECTED berarti persetujuan ditolak, sehingga satu kata bermakna dua hal. Status struk lama REJECTED dipetakan menjadi FAILED. Nilai receiptStatus yang berlaku: PENDING, VERIFIED, FAILED, NEEDS_REVIEW (architecture.md 6.1).
+
+Alasan keputusan (field decision.reason pada verifikasi struk). Nilai lama dipertahankan dan dua nilai baru ditambahkan.
+
+| reason | receiptStatus | Arti |
+|---|---|---|
+| ok | VERIFIED | Struk valid dan total sama dengan nominal transaksi. |
+| not-a-receipt | FAILED | Gambar bukan struk. |
+| low-confidence | FAILED | Keyakinan di bawah ambang 0,6 (MIN_CONFIDENCE). |
+| total-unreadable | FAILED | Total pada struk tidak terbaca. |
+| total-mismatch | FAILED | Total struk tidak sama dengan nominal transaksi. |
+| tax-mode-unknown | NEEDS_REVIEW | PPN tidak dapat dipastikan eksklusif atau inklusif. Baru. |
+| arithmetic-mismatch | NEEDS_REVIEW | Item ditambah pajak dikurangi diskon tidak sama dengan total. Baru. |
+
+Nilai constants.js lain untuk RECEIPT_STATUS belum diperiksa untuk dokumen ini.
+
+Saldo. getBalances saat ini menghitung semua transaksi tanpa melihat status struk, dan daftar anggotanya tidak menyaring status keanggotaan. Keduanya tidak dipertahankan: saldo yang baru dihitung dari LedgerEntry (architecture.md 6.2), dan CHARGE hanya ditulis setelah transaksi lolos. Pemeriksaan keseimbangan total yang sekarang berupa console.error dipertahankan sebagai pemeriksaan kesehatan.
+
+<!-- akhir-bagian-api-3c -->
+
+## 6. Persetujuan dan notifikasi
+
+### 6.1 Kode error tambahan
+
+| code | Status | Arti |
+|---|---|---|
+| already-voted | 409 | Pengguna sudah memberi suara pada Approval ini. |
+
+Kondisi lain memakai kode yang sudah ada: forbidden (pengaju atau bukan pemilih yang sah), invalid-state (Approval tidak lagi OPEN atau sudah kedaluwarsa), dan not-found.
+
+### 6.2 Notifikasi
+
+Notifikasi adalah kotak masuk pengguna lintas grup.
+
+| Endpoint | Fungsi |
+|---|---|
+| GET /api/notifications | Daftar, terbaru lebih dulu, berkursor (2.5). Query: unread=true, groupId. |
+| GET /api/notifications/unread-count | { data: { count } } untuk lencana. |
+| POST /api/notifications/:notificationId/read | Tandai satu dibaca. 204. Aman diulang. |
+| POST /api/notifications/read-all | Tandai semua dibaca. Body opsional { groupId }. 204. |
+| GET /api/me/notification-settings | { data: { notifyByEmail } } |
+| PATCH /api/me/notification-settings | Body { notifyByEmail: boolean }. Mengembalikan pengaturan terbaru. |
+
+Bentuk satu notifikasi:
+
+    {
+      "id": 501,
+      "type": "APPROVAL_REQUEST",
+      "groupId": 12,
+      "payload": { "approvalId": 77, "transactionId": 1002, "amount": 70000, "requestedBy": { "id": 4, "name": "Rey" } },
+      "readAt": null,
+      "createdAt": "2026-10-10T08:30:00.000Z"
+    }
+
+Aturan: type adalah string. Klien mengabaikan type dan field payload yang tidak dikenal (agar tipe baru tidak merusak klien lama). Nilai teks di payload adalah data tak tepercaya dan dirender sebagai teks biasa (2.2). Nama pelaku pada entri dana disamarkan sesuai 2.8.
+
+| type | Penerima | Isi payload |
+|---|---|---|
+| APPROVAL_REQUEST | Pemilih yang sah | approvalId, transactionId, amount, requestedBy |
+| APPROVAL_DECIDED | Pengaju | approvalId, transactionId, outcome (APPROVED, REJECTED, EXPIRED) |
+| CONSENT_REQUEST | Peserta transaksi subset, atau yang tanggungannya naik karena revisi | transactionId, amount (bagian peserta itu), requestedBy |
+| REVISION_NOTICE | Semua anggota aktif | transactionId, revisionId, actor, at |
+| ITEM_UNCLAIMED | Penalang | transactionId, itemIds |
+| ITEM_OFFERED | Anggota yang ditunjuk | assignmentId, itemId, transactionId |
+| HOLD_EXPIRING | Pemegang klaim | itemId, claimId, expiresAt |
+| PAYMENT_REQUEST | Kreditur | paymentId, sender, amount |
+| PAYMENT_DECIDED | Pengirim pelunasan | paymentId, status |
+| REMINDER | Debitur | creditor, amount |
+
+CONSENT_REQUEST menambah daftar tipe di architecture.md 6.4. Karena type berupa string, tidak ada perubahan skema.
+
+Email opsional: bila notifyByEmail bernilai true, notifikasi bertipe APPROVAL_REQUEST, CONSENT_REQUEST, ITEM_OFFERED, PAYMENT_REQUEST, dan REMINDER juga dikirim lewat EmailOutbox. Kolom pilihannya User.notifyByEmail (K13, architecture.md 6.1).
+
+### 6.3 Persetujuan (Approval)
+
+| Endpoint | Fungsi |
+|---|---|
+| GET /api/groups/:groupId/approvals | Daftar berkursor. Query: status=OPEN, mine=true (hanya yang bisa saya putuskan dan belum saya pilih). |
+| GET /api/groups/:groupId/approvals/:approvalId | Detail satu Approval. |
+| POST /api/groups/:groupId/approvals/:approvalId/votes | Beri suara. Body { vote: "APPROVE" | "REJECT" }. Wajib Idempotency-Key. 201, mengembalikan Approval terbaru. |
+
+Bentuk Approval:
+
+    {
+      "id": 77,
+      "groupId": 12,
+      "subjectType": "TRANSACTION",
+      "subjectId": 1002,
+      "rule": "MAJORITY",
+      "status": "OPEN",
+      "required": 3,
+      "eligibleCount": 4,
+      "approveCount": 1,
+      "rejectCount": 0,
+      "myVote": null,
+      "canVote": true,
+      "requestedBy": { "id": 4, "name": "Rey" },
+      "subject": { "transactionId": 1002, "description": "Makan malam", "amount": 70000, "mode": "EQUAL_ALL", "receiptStatus": "FAILED" },
+      "expiresAt": "2026-10-17T08:30:00.000Z",
+      "decidedAt": null,
+      "createdAt": "2026-10-10T08:30:00.000Z"
+    }
+
+Aturan:
+- canVote dan myVote dihitung server. Klien tidak menurunkannya dari rule.
+- Untuk aturan penentu tunggal (ADMIN_ANY, ADMIN_OTHER, FUND_HOLDER), satu suara langsung memutuskan: respons suara sudah berstatus APPROVED atau REJECTED.
+- Untuk subjectType REVISION dan FUND_MARK, bentuk subject disesuaikan jenisnya dan didokumentasikan bersama modul revisi dan dana.
+- Pengaju tidak dapat memberi suara (403 forbidden). Memilih dua kali: 409 already-voted. Approval yang bukan OPEN: 409 invalid-state.
+- Approval kedaluwarsa dievaluasi saat dibaca atau diberi suara (architecture.md 6.4), sehingga status EXPIRED bisa muncul tepat saat dibuka.
+
+### 6.4 Consent peserta (TransactionShare)
+
+| Endpoint | Fungsi |
+|---|---|
+| POST /api/groups/:groupId/transactions/:transactionId/shares/me/consent | Body { decision: "ACCEPT" | "REJECT" }. Wajib Idempotency-Key. |
+
+Respons 200: { data: { share: { userId, amount, consent, consentAt }, transaction: { id, status, version } } }, sehingga klien langsung tahu apakah transaksi sudah ACTIVE setelah consent ini.
+
+Aturan:
+- Berlaku bila consent share milik pemanggil masih PENDING, baik pada transaksi PENDING_APPROVAL (mode subset) maupun pada revisi yang menaikkan tanggungan (keputusan 4).
+- Bukan peserta: 403 forbidden. Consent sudah diputuskan: 409 invalid-state.
+- REJECT tidak membatalkan transaksi. Share peserta itu berstatus REJECTED dan penalang mengubah daftar peserta lewat revisi (architecture.md 7.1).
+
+### 6.5 Ringkasan tugas saya
+
+| Endpoint | Fungsi |
+|---|---|
+| GET /api/me/summary | { data: { unreadNotifications, approvalsToVote, sharesToConsent, paymentsToConfirm, itemsOffered } } untuk lencana beranda. Semua angka lintas grup. |
+
+### 6.6 Event Socket.IO
+
+Mengikuti aturan 3.3 (event memberi tahu, REST sumber kebenaran).
+
+| Event | Room | Muatan |
+|---|---|---|
+| notification:created | user:<id> | { id, type, groupId, serverTime } |
+| approval:updated | group:<id> | { approvalId, transactionId, status, serverTime } |
+| transaction:updated | group:<id> | { transactionId, status, version, serverTime } |
+| share:updated | group:<id> | { transactionId, userId, consent, serverTime } |
+
+Klien yang menerima event mengambil ulang objek terkait lewat REST, atau memperbarui lencana dengan GET /api/me/summary.
+
+<!-- akhir-bagian-api-4 -->

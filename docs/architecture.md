@@ -166,7 +166,7 @@ Perbaikan: FundEntry punya contributorId (opsional). Pemegang dana tidak bisa ke
 
 | Tabel | Kolom dan perubahan |
 |---|---|
-| User | id, email (unik), passwordHash, name, createdAt. Kolom phone dihapus. |
+| User | id, email (unik), passwordHash, name, notifyByEmail (default false), createdAt. Kolom phone dihapus. |
 | Group | id, name, code (unik), createdBy, createdAt. Tambah codeHidden (default false), joinRequiresApproval (default false), settleSimplify (default true). |
 | GroupMember | id, groupId, userId, role (OWNER, ADMIN, MEMBER), status (PENDING, ACTIVE, LEFT, REMOVED), joinedAt, leftAt, leftReason. Unik (groupId, userId). Baris tidak pernah dihapus. Anggota yang bergabung kembali memakai baris yang sama (status kembali ACTIVE, riwayat di AuditLog). Filtered unique index: satu OWNER aktif per grup (role OWNER dan status ACTIVE). |
 | Transaction | id, groupId, payerId (penalang), description, amount, mode (EQUAL_ALL, EQUAL_SUBSET, ITEMIZED), status (PENDING_APPROVAL, ACTIVE, REJECTED, EXPIRED, TAKEN_DOWN), receiptUrl, receiptStatus (PENDING, VERIFIED, FAILED, NEEDS_REVIEW), imageSha256, fingerprint, paidFromFund, version, expiresAt, createdAt. Indeks (groupId, imageSha256) dan (groupId, fingerprint). |
