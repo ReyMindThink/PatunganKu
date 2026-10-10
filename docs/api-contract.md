@@ -273,7 +273,7 @@ Alasan keputusan (field decision.reason pada verifikasi struk). Nilai lama diper
 | total-unreadable | FAILED | Total pada struk tidak terbaca. |
 | total-mismatch | FAILED | Total struk tidak sama dengan nominal transaksi. |
 | tax-mode-unknown | NEEDS_REVIEW | PPN tidak dapat dipastikan eksklusif atau inklusif. Baru. |
-| arithmetic-mismatch | NEEDS_REVIEW | Item ditambah pajak dikurangi diskon tidak sama dengan total. Baru. |
+| arithmetic-mismatch | NEEDS_REVIEW | Item ditambah service, pajak (bila eksklusif), dan ongkir dikurangi diskon tidak sama dengan total. Baru. |
 
 Nilai constants.js lain untuk RECEIPT_STATUS belum diperiksa untuk dokumen ini.
 
@@ -399,8 +399,126 @@ Mengikuti aturan 3.3 (event memberi tahu, REST sumber kebenaran).
 | notification:created | user:<id> | { id, type, groupId, serverTime } |
 | approval:updated | group:<id> | { approvalId, transactionId, status, serverTime } |
 | transaction:updated | group:<id> | { transactionId, status, version, serverTime } |
-| share:updated | group:<id> | { transactionId, userId, consent, serverTime } |
+| share:updated | user:<penalang> dan user:<peserta> | { transactionId, userId, consent, serverTime } |
 
 Klien yang menerima event mengambil ulang objek terkait lewat REST, atau memperbarui lencana dengan GET /api/me/summary.
 
 <!-- akhir-bagian-api-4 -->
+
+## 7. Pemilihan item (mode ITEMIZED)
+
+### 7.1 Konsep
+
+- Kartu pilih item adalah Message dengan kind SYSTEM_CARD, cardType ITEM_PICK, dan cardRef berisi transactionId (architecture.md 6.6). Kartu hanya penanda. Datanya selalu dibaca dari endpoint di bawah sehingga kartu mutakhir.
+- Kartu terbit hanya untuk transaksi mode ITEMIZED berstatus ACTIVE dengan struk VERIFIED, atau yang disetujui lewat aturan struk gagal AI (K9).
+- Awalan rute di bagian ini: /api/groups/:groupId/transactions/:transactionId. Semua endpoint tulis wajib Idempotency-Key (2.6).
+- Satu baris klaim per pengguna per item. Status baris: HOLDING (dipilih, belum Done) dan DONE. HOLDING dilepas otomatis setelah 12 jam, dengan pengingat pada jam ke-10.
+- Belum ditetapkan di bagian ini: perilaku klaim saat admin merevisi item (versi ekstraksi baru). Ditulis di bagian revisi.
+
+### 7.2 Perhitungan biaya
+
+1. Biaya item (C_i) adalah subtotal item ditambah porsi proporsional dari service, pajak (bila eksklusif), dan dikurangi diskon. Pembagian antar item memakai largest remainder, tie-break id item menaik. Ongkir tidak masuk C_i.
+2. Biaya per unit (unitCost) adalah floor(C_i / qty). Sisa rupiah item ditanggung penalang (K14, architecture.md).
+3. Ongkir dibagi merata hanya kepada pengguna yang punya minimal satu unit DONE, ditulis saat finalisasi, dengan largest remainder dan tie-break userId menaik (G1, G4).
+
+Contoh: Nasi Goreng 2 x Rp25.000, Es Teh 3 x Rp5.000, PPN eksklusif Rp6.500, ongkir Rp5.000, total Rp76.500.
+- C Nasi Goreng Rp55.000 dan C Es Teh Rp16.500. Jumlahnya Rp71.500, ditambah ongkir Rp5.000 sama dengan Rp76.500.
+- unitCost Nasi Goreng Rp27.500 dan Es Teh Rp5.500.
+- Ongkir Rp5.000 untuk tiga pengklaim: Rp1.667, Rp1.667, dan Rp1.666 (total Rp5.000).
+- Contoh sisa: C_i Rp10.001 dengan qty 3 menghasilkan unitCost Rp3.333, dan sisa Rp2 ditanggung penalang.
+
+### 7.3 Membaca kartu
+
+GET /api/groups/:groupId/transactions/:transactionId/items. Dapat dibaca semua anggota ACTIVE grup itu.
+
+    {
+      "data": {
+        "transactionId": 1002,
+        "phase": "CLAIMING",
+        "extractionVersion": 1,
+        "shipping": 5000,
+        "offerableAt": "2026-10-11T08:30:00.000Z",
+        "canClaim": true,
+        "canOffer": false,
+        "canFinalize": false,
+        "items": [
+          {
+            "id": 31,
+            "name": "Nasi Goreng",
+            "qty": 2,
+            "unitPrice": 25000,
+            "unitCost": 27500,
+            "claimedQty": 1,
+            "remainingQty": 1,
+            "claims": [{ "userId": 4, "name": "Rey", "qty": 1, "status": "DONE" }],
+            "myClaim": { "qty": 1, "status": "DONE", "locked": false, "holdExpiresAt": null }
+          },
+          {
+            "id": 32,
+            "name": "Es Teh",
+            "qty": 3,
+            "unitPrice": 5000,
+            "unitCost": 5500,
+            "claimedQty": 2,
+            "remainingQty": 1,
+            "claims": [{ "userId": 5, "name": "Aqidatul", "qty": 2, "status": "HOLDING" }],
+            "myClaim": null
+          }
+        ],
+        "myTotals": { "items": 27500, "shipping": null }
+      }
+    }
+
+Aturan:
+- phase bernilai CLAIMING atau FINALIZED. Ongkir pada myTotals bernilai null sampai FINALIZED (K4).
+- claimedQty menghitung unit HOLDING dan DONE. remainingQty adalah qty dikurangi claimedQty.
+- canClaim, canOffer, dan canFinalize dihitung server (seperti canVote di 6.3). Klien tidak menurunkannya sendiri.
+- offerableAt adalah 24 jam sejak kartu terbit. Sebelum itu penalang tidak dapat menunjuk anggota.
+- Nama item berasal dari OCR dan merupakan data tak tepercaya. Klien merender sebagai teks biasa (2.2).
+- Asumsi: daftar claims (siapa mengambil apa) terlihat oleh semua anggota ACTIVE, sesuai kartu di chat.
+
+### 7.4 Memilih dan Done
+
+| Endpoint | Fungsi |
+|---|---|
+| PUT .../claims/me | Body { items: [{ itemId, qty }] }. Berisi seluruh pilihan saya (penggantian penuh): item yang tidak tercantum dilepas. Atomik, semua berhasil atau tidak ada yang berubah. 200 dengan { data: { items: [{ id, claimedQty, remainingQty }], myClaims, myTotals } }. |
+| POST .../claims/me/done | Mengubah semua baris HOLDING milik saya menjadi DONE dan menulis CHARGE. 200 dengan { data: { myClaims, myTotals, phase } }. |
+
+Aturan:
+- qty bilangan bulat dan tidak boleh melebihi unit yang tersisa ditambah unit yang sudah saya pegang. Jika tidak cukup, 409 item-unavailable dengan errors berisi item yang gagal. Dua orang berebut unit terakhir: tepat satu berhasil (UPDATE bersyarat di architecture.md 6.3), yang lain mendapat 409.
+- Mengubah baris HOLDING tidak menulis ledger.
+- Mengubah atau melepas baris yang sudah DONE ditulis sebagai REVERSAL ditambah CHARGE baru (K5). Perubahan jumlah tetap berstatus DONE. Melepas sampai qty 0 menjadi RELEASED. Jika terkunci oleh pelunasan terkonfirmasi (K2): 409 claim-locked.
+- Done tanpa baris HOLDING: 409 invalid-state.
+- Jika Done ini membuat semua unit berstatus DONE, finalisasi terjadi pada panggilan yang sama: ongkir ditulis dan phase menjadi FINALIZED.
+- Transaksi bukan ACTIVE atau phase sudah FINALIZED: 409 invalid-state.
+
+### 7.5 Item belum terpilih dan finalisasi
+
+| Endpoint | Fungsi |
+|---|---|
+| POST /api/groups/:groupId/transactions/:transactionId/items/:itemId/assignments | Hanya penalang. Body { assigneeIds: [4, 5], qty: 1 }. Hanya setelah offerableAt dan bila remainingQty cukup. 201 dengan { data: [ ...assignments ] }. Satu panggilan membuat satu offerGroupId. |
+| POST /api/groups/:groupId/assignments/:assignmentId/respond | Hanya yang ditunjuk. Body { decision: "ACCEPT" | "REJECT" }. |
+| POST /api/groups/:groupId/transactions/:transactionId/finalize | Hanya penalang. |
+
+Aturan:
+- ACCEPT bersifat atomik. Penerima pertama mendapat unit itu (klaim DONE dan CHARGE). Penunjukan lain dalam offerGroupId yang sama menjadi CANCELLED (keputusan 6). Menjawab penunjukan yang tidak lagi OFFERED: 409 invalid-state. Unit sudah diambil orang lain: 409 item-unavailable.
+- finalize hanya setelah offerableAt, tanpa baris HOLDING dan tanpa penunjukan OFFERED yang menggantung. Unit yang belum diklaim menjadi bagian penalang sendiri (tidak menjadi utang), lalu ongkir ditulis (K16). Jika syarat belum terpenuhi: 409 invalid-state dengan detail penghalangnya.
+- Finalisasi juga terjadi otomatis saat semua unit DONE (7.4).
+- Pada offerableAt, penalang menerima notifikasi ITEM_UNCLAIMED (6.2). Yang ditunjuk menerima ITEM_OFFERED.
+
+### 7.6 Event Socket.IO
+
+| Event | Room | Muatan |
+|---|---|---|
+| item:updated | group:<id> | { transactionId, itemId, claimedQty, remainingQty, serverTime } |
+| items:phase | group:<id> | { transactionId, phase, serverTime } |
+
+item:updated dikirim pada setiap perubahan jumlah unit (HOLDING, DONE, RELEASED), termasuk pelepasan otomatis setelah 12 jam. Klien memperbarui angka yang tampil dari muatan itu, dan mengambil ulang GET .../items bila angkanya tidak cocok atau setelah koneksi terputus (3.3).
+
+### 7.7 Kode error tambahan
+
+| code | Status | Arti |
+|---|---|---|
+| claim-locked | 409 | Klaim DONE terkunci oleh pelunasan terkonfirmasi untuk pasangan pengutang-penalang (K2). |
+
+<!-- akhir-bagian-api-5 -->

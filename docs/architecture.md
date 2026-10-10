@@ -209,7 +209,7 @@ id, groupId, actorId, entity, entityId, action (misalnya REVISE, TAKEDOWN, OVERR
 
 **ReceiptExtraction** (satu baris per versi, tidak diubah)
 
-id, transactionId, version, source (AI atau ADMIN), createdBy, merchant, purchasedAt, subtotal, discount, service, tax, taxMode (EXCLUSIVE, INCLUSIVE, UNKNOWN), total, confidence, arithmeticOk, rawJson, model, promptVersion, createdAt. Unik (transactionId, version). Versi aktif adalah versi tertinggi. Revisi admin membuat versi baru sehingga hasil asli AI tetap tersimpan. Jika taxMode UNKNOWN atau arithmeticOk salah, receiptStatus menjadi NEEDS_REVIEW.
+id, transactionId, version, source (AI atau ADMIN), createdBy, merchant, purchasedAt, subtotal, discount, service, shipping, tax, taxMode (EXCLUSIVE, INCLUSIVE, UNKNOWN), total, confidence, arithmeticOk, rawJson, model, promptVersion, createdAt. Unik (transactionId, version). Versi aktif adalah versi tertinggi. Revisi admin membuat versi baru sehingga hasil asli AI tetap tersimpan. Jika taxMode UNKNOWN atau arithmeticOk salah, receiptStatus menjadi NEEDS_REVIEW.
 
 **ReceiptItem**
 
@@ -230,7 +230,7 @@ id, itemId, userId, qty, status (HOLDING, DONE, RELEASED, VOIDED), holdExpiresAt
 
 **ItemAssignment**
 
-id, itemId, assigneeId, status (OFFERED, ACCEPTED, DECLINED, CANCELLED), offeredBy, offeredAt, decidedAt. Penerimaan pertama dilakukan atomik dengan UPDATE bersyarat. Kandidat lain otomatis CANCELLED (keputusan 6).
+id, itemId, assigneeId, qty, offerGroupId, status (OFFERED, ACCEPTED, DECLINED, CANCELLED), offeredBy, offeredAt, decidedAt. Penerimaan pertama dilakukan atomik dengan UPDATE bersyarat. Kandidat lain otomatis CANCELLED (keputusan 6).
 
 <!-- akhir-bagian-6a -->
 
@@ -550,3 +550,37 @@ Belum ada, sehingga Tahap 0 belum boleh dinyatakan selesai:
 - Migration (sengaja belum ditulis sebelum review selesai).
 
 <!-- akhir-bagian-9 -->
+
+## 10. Koreksi lanjutan dari penyusunan kontrak API
+
+Bagian ini mencatat koreksi yang ditemukan saat menulis docs/api-contract.md. Lanjutan dari bagian 5 (K1 sampai K10) dan 7.5 (K11 dan K12).
+
+### K13. Preferensi email notifikasi
+
+Masalah: spesifikasi menyebut email notifikasi admin bersifat opsional, tetapi ERD belum menyimpan pilihannya.
+
+Perbaikan: kolom User.notifyByEmail (default false), tercatat di 6.1.
+
+### K14. Pembulatan pada mode ITEMIZED
+
+Masalah: K4 menetapkan CHARGE per unit dihitung sekali dan tetap, sedangkan klaim bisa sebagian dari qty item. Biaya satu item (setelah porsi PPN, service, dan diskon) tidak selalu habis dibagi qty. Menetapkan sisa rupiah ke pengklaim tertentu akan bergeser setiap klaim berubah. Karena itu batas selisih maksimal Rp1 per orang tidak dapat dipenuhi pada mode ini tanpa menulis ulang CHARGE terus-menerus.
+
+Perbaikan:
+- Biaya item (C_i) dihitung sekali per versi ekstraksi dengan largest remainder antar item, tie-break id item menaik. Jumlah semua C_i sama dengan total dikurangi ongkir.
+- Biaya per unit adalah floor(C_i / qty_i).
+- Sisa rupiah item (C_i dikurangi floor dikali qty, bernilai 0 sampai qty dikurangi 1) ditanggung penalang sebagai bagian biayanya sendiri, bukan utang siapa pun.
+
+Akibat: jumlah semua bagian, termasuk bagian penalang, tetap persis sama dengan total struk. Batas Rp1 per orang tetap berlaku untuk mode MERATA. Pada ITEMIZED penalang dapat menanggung hingga qty dikurangi 1 rupiah per item. Ongkir dibagi saat FINALIZE dengan largest remainder, tie-break userId menaik.
+
+### K15. Kolom yang kurang pada ERD
+
+- ReceiptExtraction.shipping (ongkir) belum ada, padahal ongkir dibebankan merata pada mode ITEMIZED. Aritmetika struk menjadi: item ditambah service, ditambah pajak (bila eksklusif), ditambah ongkir, dikurangi diskon, sama dengan total.
+- ItemAssignment memerlukan qty dan offerGroupId agar penunjukan beberapa kandidat atas satu item dapat dibatalkan bersama ketika yang pertama menerima (keputusan 6).
+
+### K16. Done, finalisasi, dan privasi event
+
+- Done dilakukan per pengguna per transaksi, bukan per item: semua baris HOLDING milik pengguna itu menjadi DONE sekaligus.
+- Finalisasi terjadi otomatis saat semua unit berstatus DONE (tanpa HOLDING dan tanpa penunjukan OFFERED). Bila ada unit yang tidak pernah diklaim, penalang dapat memfinalisasi setelah 24 jam, dan unit sisa menjadi bagian penalang sendiri (tidak menjadi utang). Ini memenuhi keputusan 6 tanpa menahan penulisan ongkir selamanya.
+- Event share:updated tidak disiarkan ke seluruh grup karena mengungkap siapa yang menolak. Event hanya dikirim ke penalang dan peserta bersangkutan. Apakah daftar consent terlihat oleh semua anggota diputuskan di bagian transaksi pada kontrak API.
+
+<!-- akhir-bagian-10 -->
