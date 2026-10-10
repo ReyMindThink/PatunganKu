@@ -334,6 +334,9 @@ Aturan: type adalah string. Klien mengabaikan type dan field payload yang tidak 
 | JOIN_REQUEST | Semua admin | requestId, user |
 | GROUP_INVITE | Penerima undangan | invitationId, group, invitedBy |
 | MEMBERSHIP_CHANGED | Pengguna yang bersangkutan | groupId, change (JOINED, REJECTED, REMOVED, ROLE_CHANGED), role |
+| FUND_HOLDER_OFFER | Calon pemegang dana | groupId, offeredBy |
+| FUND_TOPUP | Kontributor | groupId, amount |
+| FUND_HOLDER_CHANGED | Admin dan pemegang dana | groupId, phase (NOMINATED, ACCEPTED, DECLINED, CANCELLED, EXPIRED) |
 
 CONSENT_REQUEST menambah daftar tipe di architecture.md 6.4. Karena type berupa string, tidak ada perubahan skema.
 
@@ -371,8 +374,8 @@ Bentuk Approval:
 
 Aturan:
 - canVote dan myVote dihitung server. Klien tidak menurunkannya dari rule.
-- Untuk aturan penentu tunggal (ADMIN_ANY, ADMIN_OTHER, FUND_HOLDER), satu suara langsung memutuskan: respons suara sudah berstatus APPROVED atau REJECTED.
-- Untuk subjectType REVISION dan FUND_MARK, bentuk subject disesuaikan jenisnya dan didokumentasikan bersama modul revisi dan dana.
+- Untuk aturan penentu tunggal (ADMIN_ANY, ADMIN_OTHER), satu suara langsung memutuskan: respons suara sudah berstatus APPROVED atau REJECTED.
+- Untuk subjectType REVISION, bentuk subject mengikuti bagian 9.6.
 - Pengaju tidak dapat memberi suara (403 forbidden). Memilih dua kali: 409 already-voted. Approval yang bukan OPEN: 409 invalid-state.
 - Approval kedaluwarsa dievaluasi saat dibaca atau diberi suara (architecture.md 6.4), sehingga status EXPIRED bisa muncul tepat saat dibuka.
 
@@ -1166,7 +1169,7 @@ Penghalang menghasilkan 409 dengan kode leave-blocked dan field blockers:
 | Penghalang | Dapat dilewati? |
 |---|---|
 | OWNER | Tidak. Serah terima dulu. |
-| FUND_HOLDER | Tidak. Serahkan atau tutup dana dulu (architecture.md K10). |
+| FUND_HOLDER | Tidak. Serahkan dana kepada calon yang menerima, atau tutup dana (architecture.md K10 dan K36). Setelah dana ditutup, pemegang terakhir tetap diblokir selama Dana masih punya saldo tidak nol. |
 | BALANCE (saldo tidak nol pada pasangan mana pun) | Hanya admin lewat remove dengan overrideBalance true dan reason wajib. Hasilnya REMOVED dan riwayat OVERRIDE_LEAVE. |
 
 Aturan:
@@ -1207,7 +1210,153 @@ Tipe action riwayat tambahan (melengkapi 8.2): JOIN_REQUEST, JOIN_APPROVE, JOIN_
 | POST /api/groups/join | Respons menjadi { outcome, group, requestId }. Kode salah menjadi not-found (sebelumnya group-not-found). Bisa 202 bila perlu persetujuan. Ada pembatas laju 10 percobaan per 15 menit per pengguna sejak Tahap 1. |
 | GET /api/groups | Bentuk baru 11.2 dengan balance dan membership. |
 | GET /api/groups/:id | Parameter menjadi :groupId. Respons objek 11.1. Mantan anggota dengan saldo mendapat objek terbatas. Selain itu yang bukan anggota ACTIVE mendapat 403 forbidden. |
+| (semua respons grup) | Disusun dari daftar field eksplisit, bukan spread baris database. Email anggota dan code (bila codeHidden) tidak pernah ikut terkirim (architecture.md K33). |
 
 Koleksi Postman (docs/postman/build.mjs) diperbarui mengikuti perubahan ini.
 
 <!-- akhir-bagian-api-9 -->
+
+## 12. Dana kelompok
+
+### 12.1 Konsep dan objek
+
+- Awalan rute: /api/groups/:groupId/fund. Satu dana yang belum CLOSED per grup. Semua endpoint tulis wajib Idempotency-Key (2.6).
+- Dana hanya untuk transaksi EQUAL_ALL (architecture.md keputusan 9). Dana tampil sebagai Dana Kelompok. Nama pemegang hanya untuk admin, pemegang, dan calon pemegang (untuk dirinya sendiri). Pelaku entri (createdBy) tidak pernah dikirim (2.8).
+- Saldo adalah jumlah semua FundEntry bertanda: TOPUP dan SPEND_REVERSAL positif, SPEND dan REFUND negatif.
+- GET /fund mengembalikan { data: null } bila grup belum punya dana.
+
+Objek dana (anggota biasa):
+
+    {
+      "data": {
+        "id": 5,
+        "status": "ACTIVE",
+        "balance": 50000,
+        "totalContributed": 150000,
+        "totalSpent": 100000,
+        "owedByFund": 100000,
+        "owedToFund": 0,
+        "myContribution": 50000,
+        "holder": null,
+        "pendingHolder": null,
+        "canManage": false,
+        "canMark": false
+      }
+    }
+
+Aturan:
+- totalSpent adalah SPEND dikurangi SPEND_REVERSAL. Pada contoh, 150000 dikurangi 100000 menghasilkan balance 50000.
+- owedByFund adalah total utang Dana kepada pihak lain, dan owedToFund adalah total yang berutang kepada Dana (10.2, pihak kind FUND).
+- holder dan pendingHolder berbentuk { id, name } bagi admin dan pemegang, selain itu null. canManage bernilai true bagi admin dan pemegang. canMark bernilai true bagi pemegang selama dana ACTIVE. Keduanya dihitung server.
+- myContribution adalah jumlah setoran yang dicatat atas nama pemanggil.
+- Pada dana CLOSED, holderId tetap tercatat sebagai pemegang terakhir, yang masih dapat membayar utang Dana (architecture.md K36).
+
+### 12.2 Menunjuk dan mengganti pemegang
+
+| Endpoint | Fungsi |
+|---|---|
+| POST /api/groups/:groupId/fund | Admin. Body { holderId }. 201 dengan dana berstatus PENDING dan pendingHolder. Sudah ada dana yang belum CLOSED: 409 fund-exists. |
+| POST /api/groups/:groupId/fund/holder/nominate | Pemegang (serah terima) atau admin (penggantian). Body { holderId, reason }. reason wajib bagi admin. 200 dengan objek dana. |
+| DELETE /api/groups/:groupId/fund/holder/nominate | Yang menunjuk membatalkan penunjukan yang tertunda. 204. |
+| POST /api/groups/:groupId/fund/holder/accept | Calon pemegang. Dana PENDING menjadi ACTIVE, atau pergantian selesai. 200 dengan objek dana. |
+| POST /api/groups/:groupId/fund/holder/decline | Calon pemegang. 204. Dana PENDING menjadi CLOSED, pada pergantian pendingHolder dikosongkan. |
+
+Aturan:
+- Calon harus anggota ACTIVE dan bukan pemegang saat ini, selain itu 409 invalid-state. Hanya satu penunjukan tertunda. Penunjukan kedaluwarsa tujuh hari (architecture.md K36).
+- Pemegang lama tetap berwenang sampai calon menerima. Utang dan saldo Dana tidak berpindah.
+- Notifikasi: FUND_HOLDER_OFFER kepada calon, FUND_HOLDER_CHANGED kepada admin dan pemegang (6.2).
+
+### 12.3 Setoran dan pergerakan
+
+| Endpoint | Fungsi |
+|---|---|
+| POST /api/groups/:groupId/fund/topups | Hanya pemegang, dana ACTIVE. Body { contributorId, amount, source }. 201 dengan entri. |
+| GET /api/groups/:groupId/fund/entries | Anggota ACTIVE. Berkursor (2.5), terbaru lebih dulu. |
+
+Entri:
+
+    { "id": 91, "kind": "TOPUP", "amount": 50000, "source": "Iuran Oktober", "contributor": null, "transactionId": null, "createdAt": "2026-10-10T09:00:00.000Z" }
+
+Aturan:
+- amount adalah bilangan bulat positif dan tidak lebih dari batas nominal (Rp100.000.000). contributorId harus anggota ACTIVE (boleh pemegang sendiri), selain itu 409 invalid-state. source wajib dan merupakan data tak tepercaya (2.2).
+- contributor hanya terisi bagi admin, pemegang, dan orang yang bersangkutan, selain itu null (architecture.md K37). transactionId hanya terisi pada kind SPEND dan SPEND_REVERSAL.
+- kind bernilai TOPUP, SPEND, SPEND_REVERSAL, atau REFUND. Klien mengabaikan kind yang tidak dikenal.
+
+<!-- akhir-bagian-api-10a -->
+
+### 12.4 Menandai transaksi dibayar dana
+
+POST /api/groups/:groupId/transactions/:transactionId/fund-payment. Hanya pemegang. Body { baseVersion, acceptPartial }.
+
+    {
+      "data": {
+        "transaction": { "id": 1002, "status": "ACTIVE", "version": 2, "paidFromFund": true, "fundCoveredAmount": 40000 },
+        "coveredAmount": 40000,
+        "remainderAmount": 60000
+      }
+    }
+
+Aturan:
+- Dana ACTIVE, transaksi ACTIVE bermode EQUAL_ALL, belum dibayar dana, tidak ada revisi PENDING_APPROVAL, dan tidak ada share dengan consent PENDING (architecture.md K34). Pelanggaran: 409 invalid-state. baseVersion tidak cocok: 409 version-conflict.
+- Dana menutup coveredAmount, yaitu yang lebih kecil antara saldo dan total transaksi. Jika lebih kecil dari total dan acceptPartial tidak true: 409 fund-insufficient dengan field balance, amount, dan remainder. Klien menampilkan pertanyaan lalu mengirim ulang dengan acceptPartial true. Saldo nol: 409 fund-insufficient.
+- Pencatatan mengikuti architecture.md K34 dan K35. Seluruhnya terjadi dalam satu transaksi database dengan kunci pada baris dana, sehingga dua penandaan bersamaan tidak dapat memakai saldo yang sama.
+- Contoh: saldo Rp40.000 dan total Rp100.000 menghasilkan coveredAmount 40000 dan remainderAmount 60000. Sisa dibagi merata ke peserta dengan largest remainder.
+- Transaksi yang sudah dibayar dana tidak dapat direvisi (409 invalid-state). Perubahan hanya lewat takedown (9.7), yang memulihkan saldo dana.
+- Objek transaksi (9.1) bertambah satu field: fundCoveredAmount.
+
+### 12.5 Pelunasan atas nama dana (mengubah 10.4)
+
+Tambahan pada POST /api/groups/:groupId/payments:
+
+| Field | Keterangan |
+|---|---|
+| onBehalfOfFund | true bagi pemegang yang membayar kreditur atas nama Dana. Jumlah dibatasi payable pada pasangan (Dana, penerima). |
+| toFund | true bagi pihak yang berutang kepada Dana. receiverId tidak dikirim, penerima adalah pemegang. Dibatasi saldo pasangan (pengirim, Dana). |
+
+Aturan:
+- Hanya pemegang yang boleh mengirim onBehalfOfFund (403 forbidden bila bukan). Hanya pemegang yang boleh mengonfirmasi atau menolak pelunasan yang penerimanya Dana.
+- Metode yang dipakai pengirim adalah metode pemegang yang aktif. Bukti, batas 5 MB, dan validasi tipe sama dengan 10.4.
+- Objek pelunasan menampilkan pihak Dana sebagai { kind: "FUND", name: "Dana Kelompok" } bagi anggota lain. Field holder terisi bagi pihak yang bertransaksi dengan Dana, admin, dan pemegang. Selain itu null (architecture.md 8.1).
+- Konfirmasi menulis SETTLEMENT dengan sisi Dana sebagai debitur atau kreditur sesuai arah.
+- payment:updated dikirim ke user:<pengirim> dan user:<penerima>, dan pemegang adalah salah satunya (10.6).
+
+### 12.6 Penutupan dana
+
+POST /api/groups/:groupId/fund/close. Hanya pemegang.
+
+    {
+      "data": {
+        "fund": { "id": 5, "status": "CLOSED", "balance": 0 },
+        "refunds": [
+          { "contributor": { "id": 5, "name": "Aqidatul" }, "amount": 33334 },
+          { "contributor": { "id": 6, "name": "Bintang" }, "amount": 33333 },
+          { "contributor": { "id": 7, "name": "Dina" }, "amount": 33333 }
+        ]
+      }
+    }
+
+Aturan:
+- Ditolak bila masih ada pihak yang berutang kepada Dana: 409 fund-has-receivables.
+- Sisa saldo dibagi proporsional terhadap total setoran tiap kontributor (largest remainder, tie-break userId menaik, architecture.md K37). Contoh: sisa Rp100.000 untuk tiga kontributor setara, yaitu 33334, 33333, dan 33333 (jumlah 100000).
+- Untuk tiap kontributor ditulis CHARGE dari Dana dan FundEntry REFUND. Pemegang membayar lewat pelunasan atas nama dana (12.5).
+- Dana CLOSED tidak menerima setoran maupun penandaan. Grup boleh membuat dana baru. Saldo nol langsung CLOSED tanpa pengembalian.
+
+### 12.7 Event, notifikasi, dan kode error
+
+| Event | Room | Muatan |
+|---|---|---|
+| fund:updated | group:<id> | { groupId, serverTime } |
+
+Notifikasi (6.2): FUND_HOLDER_OFFER, FUND_TOPUP, dan FUND_HOLDER_CHANGED. Muatan event dan notifikasi tidak memuat identitas pemegang bagi anggota biasa.
+
+| code | Status | Arti |
+|---|---|---|
+| fund-exists | 409 | Grup sudah punya dana yang belum CLOSED. |
+| fund-insufficient | 409 | Saldo tidak cukup. Berisi balance, amount, dan remainder bila sebagian. |
+| fund-has-receivables | 409 | Masih ada pihak yang berutang kepada Dana. |
+
+Action riwayat tambahan (melengkapi 8.2): FUND_CREATE, FUND_HOLDER_NOMINATE, FUND_HOLDER_ACCEPT, FUND_HOLDER_DECLINE, FUND_TOPUP, FUND_MARK, FUND_CLOSE.
+
+Bagian ini tidak mengubah endpoint yang sudah berjalan, karena dana belum ada di kode. Koleksi Postman menambah request dana setelah implementasi.
+
+<!-- akhir-bagian-api-10 -->

@@ -72,6 +72,7 @@ Semua nilai ini disimpan di apps/backend/src/config/constants.js dan tidak ditul
 | Jeda mengajukan gabung lagi setelah ditolak atau dikeluarkan | 24 jam |
 | Batas percobaan gabung lewat kode | 10 per 15 menit per pengguna |
 | Undangan tertunda per grup | maksimal 20 |
+| Kedaluwarsa penunjukan pemegang dana | 7 hari |
 | Kuorum merata (lebih dari 50% pemilih) | floor(n / 2) + 1 |
 | Kuorum admin tunggal (20% pemilih) | min(5, max(1, ceil(n / 5))), dihitung dengan bilangan bulat |
 
@@ -174,7 +175,7 @@ Perbaikan: FundEntry punya contributorId (opsional). Pemegang dana tidak bisa ke
 | User | id, email (unik), passwordHash, name, notifyByEmail (default false), createdAt. Kolom phone dihapus. |
 | Group | id, name, code (unik), createdBy, createdAt. Tambah codeHidden (default false), joinRequiresApproval (default false). |
 | GroupMember | id, groupId, userId, role (OWNER, ADMIN, MEMBER), status (ACTIVE, LEFT, REMOVED), joinedAt, leftAt, leftReason. Unik (groupId, userId). Baris tidak pernah dihapus. Anggota yang bergabung kembali memakai baris yang sama (status kembali ACTIVE, riwayat di AuditLog). Filtered unique index: satu OWNER aktif per grup (role OWNER dan status ACTIVE). |
-| Transaction | id, groupId, payerId (penalang), description, amount, mode (EQUAL_ALL, EQUAL_SUBSET, CUSTOM, ITEMIZED), status (DRAFT, PENDING_APPROVAL, ACTIVE, REJECTED, EXPIRED, WITHDRAWN, TAKEN_DOWN), receiptUrl, receiptStatus (PENDING, VERIFIED, FAILED, NEEDS_REVIEW), imageSha256, fingerprint, paidFromFund, version, expiresAt, itemsPhase (CLAIMING, FINALIZED), finalizedAt, finalizedBy, createdAt. Indeks (groupId, imageSha256) dan (groupId, fingerprint). |
+| Transaction | id, groupId, payerId (penalang), description, amount, mode (EQUAL_ALL, EQUAL_SUBSET, CUSTOM, ITEMIZED), status (DRAFT, PENDING_APPROVAL, ACTIVE, REJECTED, EXPIRED, WITHDRAWN, TAKEN_DOWN), receiptUrl, receiptStatus (PENDING, VERIFIED, FAILED, NEEDS_REVIEW), imageSha256, fingerprint, paidFromFund, fundCoveredAmount, version, expiresAt, itemsPhase (CLAIMING, FINALIZED), finalizedAt, finalizedBy, createdAt. Indeks (groupId, imageSha256) dan (groupId, fingerprint). |
 | TransactionSplit | Dihapus, diganti TransactionShare. |
 | TransactionShare | id, transactionId, userId, amount, consent (PENDING, ACCEPTED, REJECTED), consentAt. Unik (transactionId, userId). Ini tabel kerja (alur persetujuan), bukan ledger. |
 | PaymentConfirmation | id, groupId, senderId, receiverId, amount, methodType (BANK, EWALLET, CASH), proofUrl, status (PENDING, CONFIRMED, REJECTED, CANCELLED), createdAt, decidedAt, cancelledAt. Bukti wajib kecuali CASH (divalidasi di service). Saat CONFIRMED menulis satu entri SETTLEMENT di ledger. |
@@ -243,7 +244,7 @@ id, itemId, assigneeId, qty, offerGroupId, status (OFFERED, ACCEPTED, DECLINED, 
 
 **Approval**
 
-id, groupId, subjectType (TRANSACTION, REVISION, FUND_MARK), subjectId, rule, requestedBy, eligibleCount, required, status (OPEN, APPROVED, REJECTED, EXPIRED, CANCELLED), expiresAt, decidedAt, createdAt.
+id, groupId, subjectType (TRANSACTION, REVISION), subjectId, rule, requestedBy, eligibleCount, required, status (OPEN, APPROVED, REJECTED, EXPIRED, CANCELLED), expiresAt, decidedAt, createdAt.
 
 Nilai rule dan aturan keputusannya:
 
@@ -253,7 +254,6 @@ Nilai rule dan aturan keputusannya:
 | ADMIN_OTHER | Sama dengan ADMIN_ANY, dipakai bila pengaju adalah admin | 1 | Penentu tunggal. |
 | QUORUM_20 | Semua anggota aktif selain pengaju | min(5, max(1, ceil(n / 5))) | Kuorum biasa. |
 | MAJORITY | Semua anggota aktif selain pengaju | floor(n / 2) + 1 | Kuorum biasa. |
-| FUND_HOLDER | Pemegang dana | 1 | Penentu tunggal. |
 
 Aturan kuorum biasa: status menjadi APPROVED bila jumlah suara setuju mencapai required. Status menjadi REJECTED bila jumlah suara tolak sudah melebihi eligibleCount dikurangi required (kuorum mustahil tercapai). Status menjadi EXPIRED bila expiresAt lewat tanpa keputusan, dievaluasi saat Approval dibaca atau diberi suara (lazy), dengan job terjadwal sebagai cadangan.
 
@@ -302,19 +302,19 @@ fundId (opsional). Terisi bila pelunasan dilakukan atas nama dana kelompok oleh 
 
 **GroupFund**
 
-id, groupId (unik), holderId, status (ACTIVE, CLOSED), createdBy, createdAt. Saldo dana adalah SUM atas FundEntry (TOPUP bernilai positif, SPEND dan REFUND bernilai negatif).
+id, groupId (unik selama status bukan CLOSED), holderId (kosong sampai penunjukan diterima), pendingHolderId, status (PENDING, ACTIVE, CLOSED), createdBy, createdAt. Saldo dana adalah SUM atas FundEntry (TOPUP dan SPEND_REVERSAL bernilai positif, SPEND dan REFUND bernilai negatif).
 
 **FundEntry** (append-only)
 
-id, fundId, kind (TOPUP, SPEND, REFUND), amount (BigInt, selalu positif), contributorId (opsional, wajib untuk TOPUP), source (teks keterangan sumber, wajib untuk TOPUP), transactionId (wajib untuk SPEND), createdBy, createdAt.
+id, fundId, kind (TOPUP, SPEND, SPEND_REVERSAL, REFUND), amount (BigInt, selalu positif), contributorId (opsional, wajib untuk TOPUP), source (teks keterangan sumber, wajib untuk TOPUP), transactionId (wajib untuk SPEND), createdBy, createdAt.
 
 Alur penandaan dibayar dana (K1):
 
 1. Hanya pemegang dana yang dapat menandai, dan hanya untuk transaksi mode EQUAL_ALL berstatus ACTIVE.
 2. Dalam satu transaksi database, baris GroupFund dikunci (UPDLOCK), saldo dihitung, lalu dana menutup sebesar min(saldo, total transaksi).
-3. CHARGE para anggota dibalik (REVERSAL). Ditulis CHARGE dari Dana ke penalang sebesar bagian yang ditutup dana. Sisa yang tidak tertutup dibagi merata ke anggota dengan persetujuan pemegang dana (rule FUND_HOLDER).
+3. CHARGE para anggota dibalik (REVERSAL). Ditulis CHARGE dari Dana ke penalang sebesar bagian yang ditutup dana. Sisa yang tidak tertutup dibagi merata ke peserta transaksi setelah pemegang dana menyetujuinya secara eksplisit lewat acceptPartial (K34).
 4. FundEntry SPEND ditulis sebesar bagian yang ditutup (dana dicadangkan).
-5. Bila pemegang dana sekaligus penalang, SETTLEMENT dari Dana ke penalang ditulis otomatis dan AuditLog (action FUND_MARK) wajib dicatat. Bila bukan, pemegang membayar penalang lewat PaymentConfirmation dengan fundId, yang dikonfirmasi penalang seperti pelunasan biasa.
+5. Bila pemegang dana sekaligus penalang, tidak ada CHARGE dari Dana yang ditulis karena nilainya impas (pemegang sudah memegang kasnya), dan AuditLog (action FUND_MARK, selfReimbursed true) wajib dicatat (K35). Bila bukan, pemegang membayar penalang lewat PaymentConfirmation dengan fundId, yang dikonfirmasi penalang seperti pelunasan biasa.
 6. Pemegang dana tidak bisa keluar dari grup sebelum menyerahkan dana ke pemegang baru atau menutup dana. Penutupan mengembalikan sisa proporsional terhadap kontribusi lewat FundEntry REFUND (K10).
 
 ### 6.6 Chat, pengingat, dan pendukung
@@ -467,7 +467,7 @@ Otorisasi ditegakkan di service, bukan di klien (prinsip 5). Setiap rute memerik
 | Override keluar atau dikeluarkan dengan saldo tidak nol | ya | ya | tidak | Alasan wajib, AuditLog OVERRIDE_LEAVE. OWNER tidak dapat dikeluarkan. |
 | Membuat transaksi | ya | ya | ya | payerId diambil dari token, tidak bisa atas nama orang lain. |
 | Upload struk dan verifikasi AI | penalang | penalang | penalang | Hanya penalang transaksi itu. |
-| Memberi suara pada Approval | sesuai rule | sesuai rule | sesuai rule | ADMIN_ANY dan ADMIN_OTHER hanya admin. MAJORITY dan QUORUM_20 semua anggota aktif. FUND_HOLDER hanya pemegang. Pengaju tidak boleh memilih miliknya. |
+| Memberi suara pada Approval | sesuai rule | sesuai rule | sesuai rule | ADMIN_ANY dan ADMIN_OTHER hanya admin. MAJORITY dan QUORUM_20 semua anggota aktif. Pengaju tidak boleh memilih miliknya. |
 | Consent atas share sendiri | ya | ya | ya | Hanya pemilik share. |
 | Revisi hasil AI dan nominal | langsung | langsung | tidak | Admin langsung berlaku, kecuali menyentuh tanggungannya sendiri (K6). Penalang non-admin hanya setelah distribusi dan lewat Approval. |
 | Takedown | ya | ya | tidak | Alasan wajib. Takedown yang mengurangi tanggungan pelakunya sendiri butuh admin lain (K6). |
@@ -505,7 +505,7 @@ Semua anggota melihat dana sebagai Dana Kelompok. Namun pelunasan dari dana ke p
 
 Batasan yang tetap berlaku:
 
-- Hanya penalang pada pelunasan itu yang melihat nama pemegang. Anggota lain tidak.
+- Hanya pihak yang bertransaksi dengan dana pada pelunasan itu (penalang yang dibayar, atau pihak yang berutang kepada dana) yang melihat nama pemegang. Anggota lain tidak.
 - Pengaturan dana menampilkan nama pemegang hanya kepada admin dan pemegang.
 - Pelaku entri dana disamarkan di ledger, FundEntry, dan AuditLog (7.5 butir 4).
 
@@ -762,7 +762,75 @@ Mengeluarkan admin: admin harus diturunkan lebih dulu oleh OWNER (K12). Aturan y
 ### K32. Batas anggota dan percobaan kode
 
 - Maksimal 50 anggota ACTIVE per grup (usulan, konstanta di constants.js). Pemeriksaan dilakukan saat bergabung, persetujuan permintaan, dan penerimaan undangan.
-- Kode grup 6 karakter dapat ditebak. Kekuatannya bergantung alfabet kode di group.service.js, yang belum diperiksa untuk dokumen ini. Pembatas laju 10 percobaan per 15 menit per pengguna dipasang pada endpoint bergabung sejak Tahap 1, tidak menunggu Tahap 4.
+- Kode grup 6 karakter dapat ditebak. Alfabet kode memuat 32 karakter (huruf A sampai Z tanpa I dan O, angka 2 sampai 9) dan dibangkitkan dengan randomInt dari node:crypto, sehingga ada 32 pangkat 6, yaitu 1.073.741.824 kemungkinan (30 bit). Menebak kode satu grup tertentu dengan batas 960 percobaan per hari per akun berpeluang sekitar 0,00009 persen per hari per akun. Menebak kode grup mana pun lebih mungkin seiring jumlah grup: dengan 100.000 grup sekitar 8,9 persen per hari per akun. Pembatas laju 10 percobaan per 15 menit per pengguna dipasang pada endpoint bergabung sejak Tahap 1, tidak menunggu Tahap 4.
 - Pembatas laju per pengguna tidak menghentikan penyerang yang memakai banyak akun. Pengaman utamanya adalah pengaturan kode tersembunyi, persetujuan gabung, dan rotasi kode.
 
 <!-- akhir-bagian-10e -->
+
+
+### K33. Temuan dari pembacaan group.service.js
+
+Masalah (kode yang sudah berjalan, belum diubah):
+- getGroup mengirim email semua anggota kepada setiap anggota (select email). Kontrak 11.1 menyatakan email tidak pernah ditampilkan, dan premis K29 (menguji email terdaftar) runtuh bila email semua anggota sudah terlihat.
+- listMyGroups, joinGroup, dan getGroup mengirim seluruh baris Group lewat spread, termasuk code dan createdBy, tanpa memperhatikan codeHidden. Respons yang menyebarkan baris database juga membocorkan kolom baru yang ditambahkan kelak.
+- Pemeriksaan keanggotaan diulang dengan cara berbeda di setiap service (group, ledger, payment, receipt). Setelah GroupMember punya status, satu pemeriksaan yang terlewat menjadi lubang akses bagi mantan anggota.
+- joinGroup tidak membatasi jumlah anggota.
+- Normalisasi kode (huruf besar, spasi) tidak terlihat di service. Pemeriksaannya ada di validator, yang belum dibaca untuk dokumen ini.
+
+Perbaikan:
+- Respons selalu disusun dari daftar field eksplisit.
+- Satu fungsi requireActiveMember(userId, groupId) dan requireRole dipakai semua service. Tes memeriksa bahwa setiap rute berparameter groupId menolak non-anggota dan mantan anggota.
+- Pemeriksaan batas anggota dan penyisipan dilakukan dalam satu transaksi database dengan kunci pada baris Group, supaya dua orang yang bergabung bersamaan pada anggota ke-49 tidak melampaui 50.
+- Kode dinormalisasi (trim dan huruf besar) sebelum pencarian, setelah isi validator diperiksa.
+
+### K34. Penandaan dibayar dana tanpa Approval (mengoreksi 6.4 dan K1)
+
+Masalah: 6.4 dan K1 menyebut penandaan dana memakai Approval dengan rule FUND_HOLDER. Pemegang dana adalah pihak yang menandai, jadi ia menyetujui permintaannya sendiri. Approval itu tidak berfungsi.
+
+Perbaikan:
+- Approval.subjectType FUND_MARK dan rule FUND_HOLDER dihapus. FUND_MARK tetap ada sebagai action AuditLog.
+- Penandaan adalah keputusan langsung pemegang dana. Syaratnya: dana ACTIVE, transaksi ACTIVE, mode EQUAL_ALL, belum dibayar dana, tidak ada revisi PENDING_APPROVAL, tidak ada share dengan consent PENDING, dan baseVersion cocok.
+- Syarat consent PENDING ada karena revisi yang menaikkan tanggungan (K22) membiarkan consent tertunda. REVERSAL dan CHARGE dari Dana akan bertumpuk dengan bagian kenaikan yang belum disetujui, tanpa aturan yang jelas tentang bagian itu. Pemegang menunggu consent selesai.
+- Dana menutup F, yaitu yang lebih kecil antara saldo dan total transaksi. Jika F lebih kecil dari total, pemegang harus menyatakan acceptPartial secara eksplisit. Itulah persetujuan pembagian sisa yang dimaksud spesifikasi. Jika saldo nol, ditolak (409 fund-insufficient).
+- Pencatatan: Transaction.paidFromFund true, Transaction.fundCoveredAmount F, FundEntry SPEND F, dan AuditLog FUND_MARK.
+- Transaksi yang sudah dibayar dana tidak dapat direvisi (409 invalid-state). Perubahan hanya lewat takedown lalu pengajuan baru. Alasannya, revisi nominal akan mengubah SPEND dan CHARGE dari dana, dan kenaikan di atas saldo membuka kasus tanpa aturan.
+- Pemegang dana yang juga penalang boleh menandai transaksinya sendiri. Pembatasnya: transaksi itu sudah lolos aturan persetujuannya masing-masing, dan baris FUND_MARK memuat penanda selfReimbursed.
+
+### K35. Dana sebagai pihak ledger: perhitungan kasus
+
+Contoh penuh. Empat peserta: pengguna 4 penalang, 5 pemegang dana, 6 dan 7 anggota. Total Rp100.000, bagian awal Rp25.000 masing-masing, saldo dana Rp150.000.
+1. REVERSAL atas tiga CHARGE awal (5, 6, dan 7 ke 4, masing-masing Rp25.000).
+2. CHARGE dari Dana ke 4 sebesar Rp100.000.
+3. FundEntry SPEND Rp100.000. Saldo dana menjadi Rp50.000.
+4. Pemegang membayar pengguna 4 lewat pelunasan atas nama dana. Setelah dikonfirmasi pengguna 4, SETTLEMENT Dana ke 4 sebesar Rp100.000 ditulis.
+
+Contoh sebagian. Saldo Rp40.000, acceptPartial true. F adalah Rp40.000 dan sisa Rp60.000 dibagi empat peserta menjadi Rp15.000. REVERSAL atas tiga CHARGE awal, lalu CHARGE baru Rp15.000 dari 5, 6, dan 7 ke 4, CHARGE Dana ke 4 sebesar Rp40.000, dan SPEND Rp40.000. Pengguna 4 menerima Rp40.000 dari dana dan Rp45.000 dari tiga anggota, serta menanggung Rp15.000 sendiri: total Rp100.000. Bila sisa tidak habis dibagi (saldo Rp30.001, sisa Rp69.999), largest remainder dengan tie-break userId menaik (G4): peserta 4, 5, dan 6 mendapat Rp17.500, dan peserta 7 mendapat Rp17.499 (jumlah Rp69.999).
+
+Pemegang dana sama dengan penalang: tidak ada CHARGE dari Dana dan tidak ada SETTLEMENT, karena nilainya impas. SETTLEMENT mewajibkan paymentId, sedangkan tidak ada pelunasan nyata. Yang ditulis hanya REVERSAL atau pergantian CHARGE anggota lain, FundEntry SPEND, dan AuditLog dengan selfReimbursed true.
+
+Anggota yang sudah melunasi sebelum penandaan: pelunasan dicatat per pasangan (keputusan 10), jadi tidak dapat dikaitkan ke satu transaksi. REVERSAL membuat saldo pasangan menjadi kredit untuk anggota itu sesuai K25, tanpa pembatasan tambahan.
+
+Takedown transaksi yang dibayar dana: semua CHARGE aktif terkait dibalik lewat REVERSAL, dan FundEntry SPEND_REVERSAL sebesar fundCoveredAmount memulihkan saldo dana. Bila penalang sudah menerima SETTLEMENT dari dana, saldo pasangan (Dana, penalang) menjadi negatif dan penalang berutang kembali kepada dana. Contoh: CHARGE Rp100.000, SETTLEMENT minus Rp100.000, REVERSAL minus Rp100.000, sehingga N(Dana, penalang) adalah minus Rp100.000. Penalang membayar lewat pelunasan ke dana, yang dikonfirmasi pemegang.
+
+Pelunasan dua arah (mengubah 10.4): dana membayar kreditur (pengirim pemegang, onBehalfOfFund), dan pihak yang berutang kepada dana membayar dana (penerima pemegang, toFund). Pengecualian identitas di 8.1 berlaku untuk kedua arah.
+
+Aritmetika: perkalian dan pembagian proporsional (PPN, pengembalian dana) memakai BigInt, karena hasil kali dua nilai hingga Rp100.000.000 mencapai 10 pangkat 16, melebihi bilangan bulat aman JavaScript (sekitar 9,007 kali 10 pangkat 15). Ini perluasan K7.
+
+### K36. Siklus pemegang dana
+
+- Penunjukan: admin menunjuk, dan dana berstatus PENDING sampai calon menerima. Calon harus anggota ACTIVE dan menerima dalam tujuh hari. Menolak atau kedaluwarsa menutup dana kosong itu (CLOSED), dan admin dapat menunjuk ulang. Pemegang tidak boleh dibebani tanpa persetujuannya, karena penghalang keluar di bawah membuatnya tidak dapat keluar dari grup.
+- Serah terima: pemegang menunjuk calon baru, dan pergantian terjadi saat calon menerima. Saldo dan utang Dana tidak berpindah karena Dana adalah pihak ledger tersendiri. Pelunasan PENDING atas nama dana yang sudah dikirim pemegang lama tetap diproses.
+- Pergantian oleh admin (pemegang tidak aktif): admin menunjuk dengan alasan wajib. Pemegang lama diberi notifikasi dan tetap pemegang sampai calon menerima. Risiko yang diterima: sistem tidak dapat membuktikan uang tunai berpindah tangan.
+- Penghalang keluar (menyempurnakan K10 dan K31):
+  - Selama dana belum CLOSED, pemegang tidak dapat keluar atau dikeluarkan. Serah terima yang diterima calon membebaskannya.
+  - Setelah dana CLOSED, holderId tetap tercatat sebagai pemegang terakhir. Ia tidak dapat keluar selama Dana masih punya saldo tidak nol pada pasangan mana pun, karena hanya dia yang dapat membayar utang Dana (onBehalfOfFund). Penutupan ditolak selama masih ada pihak yang berutang kepada Dana (K37), jadi yang mungkin tersisa hanya utang Dana kepada pihak lain.
+  - Penghalang ini tidak dapat dilewati admin (K31). Jalan keluar bagi pemegang yang tidak aktif sebelum dana ditutup adalah penggantian oleh admin. Risiko yang diterima: pemegang terakhir yang tidak aktif setelah dana CLOSED menahan utang Dana tanpa jalan keluar di sistem.
+
+### K37. Setoran, visibilitas, dan penutupan dana
+
+- Setoran: hanya pemegang. contributorId wajib dan harus anggota ACTIVE (boleh pemegang sendiri), source wajib (teks bebas). Kontributor menerima notifikasi FUND_TOPUP. Tidak ada konfirmasi kontributor. Risiko yang diterima: pemegang dapat mencatat setoran fiktif atas nama orang lain, yang memengaruhi pembagian pengembalian. Pembatasnya: kontributor diberi tahu dan semua pergerakan tercatat.
+- Visibilitas: anggota biasa melihat saldo, total terkumpul, total terpakai, utang dana, serta daftar pergerakan (jenis, nominal, waktu, keterangan sumber) tanpa nama kontributor dan tanpa pelaku. Mereka melihat kontribusinya sendiri. Admin dan pemegang melihat nama kontributor. Alasannya, bila pemegang ikut menyetor, daftar kontributor akan membuka identitasnya. Keterangan sumber adalah teks bebas dan dapat memuat nama, itu risiko yang diterima.
+- Penutupan: hanya pemegang, dan ditolak bila masih ada pihak yang berutang kepada dana (409 fund-has-receivables). Sisa saldo dibagi proporsional terhadap total setoran tiap kontributor dengan largest remainder, tie-break userId menaik, BigInt. Untuk tiap kontributor ditulis CHARGE Dana ke kontributor dan FundEntry REFUND, lalu pemegang membayar lewat pelunasan atas nama dana. Contoh: setoran pengguna 5, 6, dan 7 masing-masing Rp50.000 (total Rp150.000), terpakai Rp50.000, sisa Rp100.000, pengembalian Rp33.334, Rp33.333, dan Rp33.333 (jumlah Rp100.000).
+- Dana CLOSED tidak menerima setoran maupun penandaan. Grup boleh membuat dana baru. Utang Dana yang tersisa tetap diselesaikan pemegang terakhir (penghalang keluar di K36).
+
+<!-- akhir-bagian-10f -->
