@@ -1,0 +1,11 @@
+.rings {
+  position: absolute;
+  top: 202px;
+  left: 50%;
+  width: 492px;
+  max-width: none;
+  height: auto;
+  transform: translateX(-50%);
+  fill: var(--color-brand-deep);
+  pointer-events: none;
+}

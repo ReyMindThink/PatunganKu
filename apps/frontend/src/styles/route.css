@@ -1,0 +1,35 @@
+.route-viewport {
+  min-height: 100dvh;
+  overflow: hidden;
+  background: var(--color-brand);
+}
+
+.route {
+  min-height: 100dvh;
+  will-change: transform;
+}
+
+.route--up {
+  animation: push-up 600ms ease both;
+}
+
+.route--down {
+  animation: push-down 600ms ease both;
+}
+
+@keyframes push-up {
+  from { transform: translateY(100dvh); }
+  to { transform: translateY(0); }
+}
+
+@keyframes push-down {
+  from { transform: translateY(-100dvh); }
+  to { transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .route--up,
+  .route--down {
+    animation-duration: 0.01ms;
+  }
+}
