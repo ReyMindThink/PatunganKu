@@ -73,6 +73,9 @@ Semua nilai ini disimpan di apps/backend/src/config/constants.js dan tidak ditul
 | Batas percobaan gabung lewat kode | 10 per 15 menit per pengguna |
 | Undangan tertunda per grup | maksimal 20 |
 | Kedaluwarsa penunjukan pemegang dana | 7 hari |
+| Panjang maksimal pesan chat | 2000 karakter Unicode |
+| Batas pesan teks per pengguna per grup | 20 per menit (usulan) |
+| Batas gambar chat per pengguna per grup | 5 per 5 menit (usulan) |
 | Kuorum merata (lebih dari 50% pemilih) | floor(n / 2) + 1 |
 | Kuorum admin tunggal (20% pemilih) | min(5, max(1, ceil(n / 5))), dihitung dengan bilangan bulat |
 
@@ -174,7 +177,7 @@ Perbaikan: FundEntry punya contributorId (opsional). Pemegang dana tidak bisa ke
 |---|---|
 | User | id, email (unik), passwordHash, name, notifyByEmail (default false), createdAt. Kolom phone dihapus. |
 | Group | id, name, code (unik), createdBy, createdAt. Tambah codeHidden (default false), joinRequiresApproval (default false). |
-| GroupMember | id, groupId, userId, role (OWNER, ADMIN, MEMBER), status (ACTIVE, LEFT, REMOVED), joinedAt, leftAt, leftReason. Unik (groupId, userId). Baris tidak pernah dihapus. Anggota yang bergabung kembali memakai baris yang sama (status kembali ACTIVE, riwayat di AuditLog). Filtered unique index: satu OWNER aktif per grup (role OWNER dan status ACTIVE). |
+| GroupMember | id, groupId, userId, role (OWNER, ADMIN, MEMBER), status (ACTIVE, LEFT, REMOVED), joinedAt, activeSince, leftAt, leftReason. Unik (groupId, userId). Baris tidak pernah dihapus. Anggota yang bergabung kembali memakai baris yang sama (status kembali ACTIVE, riwayat di AuditLog). Filtered unique index: satu OWNER aktif per grup (role OWNER dan status ACTIVE). |
 | Transaction | id, groupId, payerId (penalang), description, amount, mode (EQUAL_ALL, EQUAL_SUBSET, CUSTOM, ITEMIZED), status (DRAFT, PENDING_APPROVAL, ACTIVE, REJECTED, EXPIRED, WITHDRAWN, TAKEN_DOWN), receiptUrl, receiptStatus (PENDING, VERIFIED, FAILED, NEEDS_REVIEW), imageSha256, fingerprint, paidFromFund, fundCoveredAmount, version, expiresAt, itemsPhase (CLAIMING, FINALIZED), finalizedAt, finalizedBy, createdAt. Indeks (groupId, imageSha256) dan (groupId, fingerprint). |
 | TransactionSplit | Dihapus, diganti TransactionShare. |
 | TransactionShare | id, transactionId, userId, amount, consent (PENDING, ACCEPTED, REJECTED), consentAt. Unik (transactionId, userId). Ini tabel kerja (alur persetujuan), bukan ledger. |
@@ -321,7 +324,7 @@ Alur penandaan dibayar dana (K1):
 
 **Message** (append-only)
 
-id, groupId, senderId (kosong untuk pesan sistem), kind (TEXT, IMAGE, SYSTEM_CARD), body (maksimal 2000 karakter), imageUrl, cardType (APPROVAL, ITEM_PICK, dan sejenisnya), cardRef (id subjek kartu), createdAt. Indeks (groupId, id) untuk pagination berbasis kursor. Mantan anggota tidak punya akses baca maupun tulis. Gambar maksimal 5 MB dengan tipe divalidasi dari byte awal (keputusan 12). Tidak ada edit atau hapus pesan di tahap awal. Kartu sistem hanya merujuk id, sedangkan datanya dibaca dari tabel sumbernya sehingga kartu selalu mutakhir.
+groupId, seq (nomor urut per grup, mulai 1, tanpa celah, kunci utama bersama groupId), senderId (kosong untuk pesan sistem), kind (TEXT, IMAGE, SYSTEM_CARD), body (maksimal 2000 karakter Unicode, kolom NVarChar(4000)), imageBlob, imageMime, imageSize (hanya untuk IMAGE), cardType (ITEM_PICK atau APPROVAL), cardRef (id subjek kartu), createdAt. Unik (groupId, cardType, cardRef) untuk SYSTEM_CARD. Indeks (groupId, seq) untuk pagination dua arah. Mantan anggota tidak punya akses baca maupun tulis. Gambar maksimal 5 MB dengan tipe divalidasi dari byte awal (keputusan 12). Tidak ada edit atau hapus pesan di tahap awal. Kartu sistem hanya merujuk id, sedangkan datanya dibaca dari tabel sumbernya sehingga kartu selalu mutakhir. Tabel pendukung GroupChat dan ChatReadState serta aturan lengkapnya ada di K38 sampai K41.
 
 **Reminder**
 
@@ -834,3 +837,55 @@ Aritmetika: perkalian dan pembagian proporsional (PPN, pengembalian dana) memaka
 - Dana CLOSED tidak menerima setoran maupun penandaan. Grup boleh membuat dana baru. Utang Dana yang tersisa tetap diselesaikan pemegang terakhir (penghalang keluar di K36).
 
 <!-- akhir-bagian-10f -->
+
+### K38. Nomor urut pesan per grup tanpa celah
+
+Masalah: kolom identity di SQL Server tidak menjamin urutan commit sama dengan urutan nilainya. Dua pengirim bersamaan dapat memperoleh nomor 101 dan 102, lalu transaksi 102 commit lebih dulu. Klien yang menyusul dengan after=102 melewatkan pesan 101 selamanya. Pada pesan yang permanen dan tidak dapat diperbaiki, ini tidak boleh terjadi.
+
+Perbaikan:
+- Tabel GroupChat: groupId (kunci utama), lastSeq (BigInt, awal 0). Dibuat dalam transaksi yang sama dengan pembuatan grup.
+- Message memakai kunci utama (groupId, seq), tanpa id global. Nomor seq adalah id pesan di API.
+- Menulis pesan dalam satu transaksi: UPDATE GroupChat SET lastSeq = lastSeq + 1 OUTPUT inserted.lastSeq WHERE groupId = @groupId, lalu INSERT Message dengan seq hasilnya, lalu commit. Kunci baris yang diambil UPDATE bertahan sampai commit atau rollback, sehingga pengirim lain menunggu, urutan commit sama dengan urutan seq, dan rollback ikut membatalkan kenaikan sehingga tidak ada celah.
+- Aturan penguncian: tidak ada kunci lain yang diminta setelah kunci GroupChat diambil, untuk mencegah deadlock. Transaksi domain yang membuat kartu sistem (K40) menulis kartunya sebagai pernyataan terakhir sebelum commit supaya kunci tertahan sebentar. Unggahan berkas ke Blob dilakukan sebelum transaksi dimulai.
+- Siaran ke klien dilakukan setelah commit. Bila server mati antara commit dan siaran, klien menyusul lewat REST.
+- ChatReadState: groupId, userId, lastReadSeq (BigInt), updatedAt, kunci utama (groupId, userId). Dibuat pada setiap aktivasi keanggotaan dengan lastReadSeq sama dengan lastSeq saat itu, supaya anggota baru tidak menerima ribuan pesan belum dibaca. lastReadSeq hanya naik.
+- Biaya: pengiriman pesan dalam satu grup berjalan berurutan. Pada batas 50 anggota dan batas laju K41, ini dapat diterima.
+
+Contoh: grup 12 dengan lastSeq 120. Pengguna A dan B mengirim bersamaan. A memperoleh 121 dan menahan kunci. B menunggu, lalu memperoleh 122 setelah A commit. Kedua pesan terurut.
+
+Contoh belum dibaca: lastSeq 120 dan lastReadSeq 115. Pesan 116 sampai 120 berjumlah 5, dua di antaranya milik pengguna itu sendiri, sehingga belum dibaca berjumlah 3.
+
+### K39. Jendela pesan yang terlihat
+
+Masalah: spesifikasi hanya menyatakan mantan anggota tanpa akses chat. Belum diatur apa yang dilihat anggota baru atau yang bergabung kembali. Riwayat chat lama dapat memuat percakapan antar mantan anggota, atau kartu berisi nama dan nominal yang tidak ditujukan kepada anggota baru.
+
+Perbaikan (default, menunggu konfirmasi):
+- GroupMember.activeSince diisi pada setiap aktivasi: bergabung, bergabung kembali, permintaan disetujui, undangan diterima. joinedAt tetap tanggal pertama.
+- Pesan terlihat bagi anggota ACTIVE hanya bila createdAt lebih besar atau sama dengan activeSince. Pesan sebelum itu tidak muncul di daftar, jumlah belum dibaca, siaran, maupun unduhan gambar.
+- Anggota yang keluar lalu bergabung kembali tidak melihat pesan dari periode sebelumnya. Ini konsekuensi yang diterima demi aturan yang sederhana.
+- Riwayat transaksi tetap terlihat penuh oleh semua anggota ACTIVE (7.4). Kartu yang terbit sebelum activeSince tidak tampil di chat, tetapi anggota baru tetap dapat membuka transaksinya dari riwayat dan ikut memilih item.
+
+Contoh: Dina memiliki activeSince 2026-10-10T09:00:00.000Z. Pesan pada 08:59:59 tidak terlihat. Pesan pada 09:00:00 terlihat.
+
+### K40. Kartu sistem dan pencatatan
+
+- Hanya dua jenis kartu: ITEM_PICK (cardRef berisi transactionId, terbit saat transaksi ITEMIZED menjadi ACTIVE, 7.1) dan APPROVAL (cardRef berisi approvalId, terbit saat Approval dibuat, 6.3). Tidak ada pesan sistem berupa teks, termasuk pengumuman bergabung atau keluar. Pengumuman akan membuka pengeluaran anggota dan membanjiri chat.
+- Permintaan consent peserta (K23) tidak pernah menjadi kartu. Chat dibaca seluruh anggota dan akan mengumumkan siapa yang diminta menanggung dan siapa yang menolak. Consent hanya lewat notifikasi CONSENT_REQUEST.
+- Kartu hanya penanda berisi jenis dan id. Datanya dibaca lewat REST sehingga kartu selalu mutakhir, dan status akhir (REJECTED, EXPIRED, TAKEN_DOWN) tampil pada kartu lama.
+- Satu kartu per subjek (unik groupId, cardType, cardRef). Kartu ditulis dalam transaksi yang sama dengan peristiwanya, sebagai pernyataan terakhir (K38). Bila transaksi gagal tidak ada kartu yatim, dan bila berhasil tidak ada kartu ganda.
+- Tidak ada endpoint klien untuk membuat kartu.
+- Semua anggota ACTIVE dapat membaca Approval grupnya, karena kartunya berada di chat bersama. canVote tetap dihitung server (6.3).
+- Pesan chat dan ChatReadState tidak ditulis ke AuditLog. Message adalah catatan permanen itu sendiri, dan penulisan ganda hanya membesarkan riwayat. Ini pengecualian atas K19.
+
+### K41. Konten, batas, dan risiko pesan permanen
+
+- Teks: dipangkas. Karakter kontrol (U+0000 sampai U+001F kecuali baris baru dan tab, serta U+007F sampai U+009F) dan pengatur arah teks (U+202A sampai U+202E, serta U+2066 sampai U+2069) dibuang. Pesan kosong ditolak. Batas 2000 karakter Unicode (code point). Kolom NVarChar(4000) cukup untuk kasus terburuk, yaitu 2000 code point yang masing-masing dua unit UTF-16 (2000 kali 2 sama dengan 4000).
+- Gambar: JPEG, PNG, atau WebP dari byte awal, maksimal 5 MB. SVG ditolak karena dapat memuat skrip. Disimpan di container chat dengan nama acak, dan hanya dialirkan backend setelah pemeriksaan keanggotaan dan jendela K39. Server tidak mendekode gambar pada tahap ini.
+- Batas laju (usulan): 20 pesan teks per menit dan 5 gambar per 5 menit per pengguna per grup. Dipasang bersama chat di Tahap 3, tidak menunggu Tahap 4, karena spam tidak dapat dihapus.
+- Unggahan yatim: bila Blob berhasil tetapi transaksi database gagal, server menghapus blob itu. Job pembersih (Tahap 4) menyapu sisanya.
+- Risiko yang diterima (mengikuti spesifikasi: pesan permanen, tanpa edit dan hapus): pesan atau gambar yang terkirim keliru, bersifat pribadi, atau melanggar hukum tidak dapat ditarik, termasuk oleh admin. Rancangan memungkinkan penambahan kelak tanpa mengubah Message, yaitu tabel terpisah MessageHidden (groupId, seq, hiddenBy, reason, createdAt) yang menyembunyikan isi dari anggota sambil menyimpan aslinya. Tidak dibangun sekarang. Disarankan ke frontend: konfirmasi sebelum mengirim gambar.
+- EXIF: gambar dapat membawa metadata lokasi. Server tidak membuangnya pada tahap ini. Frontend dapat menghapusnya dengan menggambar ulang gambar ke canvas sebelum mengunggah (sekaligus mengecilkan ukuran), tetapi server tidak dapat mengandalkan itu.
+- Pertumbuhan penyimpanan tidak dibatasi, karena pesan permanen dan grup tidak dapat dihapus. Dicatat sebagai risiko operasional.
+- Chatbot memperlakukan isi chat sebagai data tak tepercaya (bagian chatbot).
+
+<!-- akhir-bagian-10g -->

@@ -113,14 +113,14 @@ Semua endpoint daftar yang bisa panjang memakai kursor, bukan nomor halaman, sup
     }
 
 - Jika tidak ada halaman lagi, hasMore bernilai false dan nextCursor null.
-- Urutan bawaan: terbaru lebih dulu. Untuk chat, klien memakai parameter after (id pesan) untuk menyusul pesan yang terlewat setelah koneksi terputus.
+- Urutan bawaan: terbaru lebih dulu. Chat adalah pengecualian: dua arah dengan parameter before dan after, dan bentuk page berbeda (bagian 13.3).
 - Endpoint yang hasilnya selalu kecil (anggota grup, daftar metode pembayaran) boleh mengembalikan {data: [...]} tanpa page.
 
 ### 2.6 Idempotency
 
 Dobel-tap atau percobaan ulang jaringan tidak boleh menulis entri ledger dua kali.
 
-- Header Idempotency-Key berisi UUID v4 yang dibuat klien untuk tiap niat aksi. Wajib untuk: pembuatan transaksi, penandaan Done dan klaim item, pengiriman pelunasan, konfirmasi pelunasan, pemberian suara Approval, consent peserta, penandaan dibayar dana, dan penambahan dana. Tanpa header: 400 dengan code validation-failed.
+- Header Idempotency-Key berisi UUID v4 yang dibuat klien untuk tiap niat aksi. Wajib untuk: pembuatan transaksi, penandaan Done dan klaim item, pengiriman pelunasan, konfirmasi pelunasan, pemberian suara Approval, consent peserta, penandaan dibayar dana, penambahan dana, dan pengiriman pesan chat. Tanpa header: 400 dengan code validation-failed.
 - Kunci disimpan per pengguna selama 24 jam (konstanta di constants.js). Permintaan ulang dengan kunci, metode, dan path yang sama mengembalikan respons tersimpan dan header Idempotent-Replay: true.
 - Kunci sama dengan isi permintaan berbeda: 409 idempotency-key-reuse. Permintaan pertama masih berjalan: 409 request-in-progress.
 
@@ -154,6 +154,7 @@ Server yang memutuskan apa yang boleh terlihat, bukan klien.
 ### 3.3 Aturan event
 
 - Sumber kebenaran adalah REST. Event hanya memberi tahu bahwa ada perubahan, dengan muatan minimal (jenis, id, version bila ada, serverTime). Klien mengambil data terbaru lewat REST bila perlu.
+- Pengecualian: message:created membawa objek pesan lengkap karena pesan tidak dapat diubah, sehingga tidak ada risiko data basi (bagian 13.7).
 - Event tidak diulang setelah koneksi terputus. Klien yang tersambung kembali mengambil ulang data yang tampil (kartu aktif, notifikasi belum dibaca, chat dengan parameter after).
 - Penamaan event: <domain>:<aksi> dengan huruf kecil, misalnya item:claimed, approval:decided, message:created. Daftar event lengkap ditulis bersama endpoint tiap modul.
 - Aksi menulis (klaim item, Done, kirim pesan) tetap lewat REST dengan Idempotency-Key. Socket hanya untuk menyiarkan hasilnya, supaya satu jalur penulisan dan satu jalur validasi.
@@ -1360,3 +1361,164 @@ Action riwayat tambahan (melengkapi 8.2): FUND_CREATE, FUND_HOLDER_NOMINATE, FUN
 Bagian ini tidak mengubah endpoint yang sudah berjalan, karena dana belum ada di kode. Koleksi Postman menambah request dana setelah implementasi.
 
 <!-- akhir-bagian-api-10 -->
+
+## 13. Chat grup dan pesan sistem
+
+### 13.1 Konsep dan objek
+
+- Awalan rute: /api/groups/:groupId/messages. Semua endpoint tulis wajib Idempotency-Key (2.6), karena pengiriman ulang akibat jaringan menghasilkan dua pesan permanen yang tidak dapat dihapus.
+- Jenis pesan: TEXT, IMAGE, SYSTEM_CARD. Tidak ada edit, hapus, balasan, mention, stiker, status dibaca untuk orang lain, maupun telepon (spesifikasi produk). Emoji adalah karakter Unicode di dalam teks.
+- Hanya anggota ACTIVE yang membaca dan menulis. Pesan terlihat mulai activeSince anggota itu (architecture.md K39).
+- id pesan adalah nomor urut per grup (K38): bilangan bulat mulai 1, naik tanpa celah menurut urutan commit. id hanya unik dalam satu grup.
+- Pesan chat tidak ditulis ke AuditLog (K40).
+- Teks, nama pengirim, dan keterangan gambar adalah data tak tepercaya dan dirender sebagai teks biasa (2.2).
+
+Pesan teks:
+
+    {
+      "data": {
+        "id": 120,
+        "kind": "TEXT",
+        "sender": { "id": 4, "name": "Rey", "membership": "ACTIVE" },
+        "body": "Ayo makan malam di warung depan",
+        "image": null,
+        "card": null,
+        "createdAt": "2026-10-10T09:30:00.000Z"
+      }
+    }
+
+Pesan gambar:
+
+    {
+      "id": 121,
+      "kind": "IMAGE",
+      "sender": { "id": 5, "name": "Aqidatul", "membership": "ACTIVE" },
+      "body": "Struk tadi siang",
+      "image": { "mimeType": "image/jpeg", "sizeBytes": 245000 },
+      "card": null,
+      "createdAt": "2026-10-10T09:31:00.000Z"
+    }
+
+Kartu sistem:
+
+    {
+      "id": 122,
+      "kind": "SYSTEM_CARD",
+      "sender": null,
+      "body": null,
+      "image": null,
+      "card": { "type": "ITEM_PICK", "transactionId": 1002 },
+      "createdAt": "2026-10-10T09:32:00.000Z"
+    }
+
+Aturan field:
+- sender bernilai null untuk SYSTEM_CARD. membership bernilai ACTIVE, LEFT, atau REMOVED. Klien menandai mantan anggota.
+- body wajib untuk TEXT, opsional untuk IMAGE sebagai keterangan, dan null untuk SYSTEM_CARD.
+- image hanya terisi untuk IMAGE. Byte gambar dibaca lewat endpoint 13.4, bukan dari objek pesan.
+- card.type bernilai ITEM_PICK (berisi transactionId) atau APPROVAL (berisi approvalId dan transactionId). Klien mengabaikan type yang tidak dikenal.
+
+### 13.2 Mengirim pesan
+
+| Endpoint | Fungsi |
+|---|---|
+| POST /api/groups/:groupId/messages | Mengirim teks. Body JSON { body }. 201 dengan { data: pesan }. |
+| POST /api/groups/:groupId/messages/images | Mengirim gambar. multipart/form-data dengan field image (wajib) dan body (keterangan, opsional). 201 dengan { data: pesan }. |
+
+Aturan teks (architecture.md K41):
+- body dipangkas. Karakter kontrol dan pengatur arah teks dibuang. Hasil kosong: 400 validation-failed. Lebih dari 2000 karakter Unicode: 400 validation-failed.
+- Keterangan gambar mengikuti aturan yang sama.
+
+Aturan gambar:
+- Tipe ditentukan dari byte awal: JPEG, PNG, atau WebP. Header Content-Type dan ekstensi dari klien diabaikan. Tipe lain, termasuk SVG: 415 unsupported-media-type. Lebih dari 5 MB: 413 payload-too-large. Field image tidak ada: 400 validation-failed.
+- Gambar disimpan di container chat dengan nama acak. Server tidak mendekode gambar dan tidak membuang metadata EXIF. Frontend disarankan menggambar ulang gambar ke canvas sebelum mengunggah, supaya metadata lokasi hilang dan ukuran mengecil.
+- Perbandingan Idempotency-Key untuk gambar memakai field teks dan SHA-256 berkas (2.6).
+
+Batas laju (K41, usulan): 20 pesan teks per menit dan 5 gambar per 5 menit per pengguna per grup. Terlampaui: 429 rate-limited dengan header Retry-After.
+
+Bukan anggota ACTIVE: 403 forbidden. Pesan baru langsung disiarkan ke seluruh anggota (13.7).
+
+### 13.3 Membaca pesan
+
+GET /api/groups/:groupId/messages. Pengecualian atas 2.5: dua arah, tanpa nextCursor.
+
+| Query | Arti |
+|---|---|
+| limit | Bilangan bulat. Bawaan 30, maksimal 100. |
+| before | id pesan. Mengembalikan pesan yang lebih lama dari id itu. |
+| after | id pesan. Mengembalikan pesan yang lebih baru dari id itu. |
+
+Aturan:
+- Hasil selalu berurutan menaik menurut id. Tanpa before dan after, hasilnya adalah limit pesan terbaru.
+- before dan after bersamaan, atau nilai bukan bilangan bulat positif: 400 validation-failed.
+- Respons:
+
+    {
+      "data": [ ...pesan... ],
+      "page": { "hasMoreBefore": true, "hasMoreAfter": false }
+    }
+
+- Hanya pesan yang terlihat bagi pemanggil (K39). Pada batas jendela, hasMoreBefore bernilai false walau ada pesan yang lebih lama di database.
+- Contoh: pesan terakhir bernomor 120 dan limit 30. Tanpa parameter, hasilnya pesan 91 sampai 120 dengan hasMoreBefore true (bila ada pesan terlihat yang lebih lama).
+- Menyusul setelah koneksi terputus: klien terakhir menerima pesan 115, lalu memanggil after=115. Hasilnya pesan 116 sampai 120 dengan hasMoreAfter false. Bila hasMoreAfter true, klien memanggil lagi dengan after berisi id terbesar yang baru diterima.
+
+<!-- akhir-bagian-api-11a -->
+
+### 13.4 Mengunduh gambar
+
+GET /api/groups/:groupId/messages/:messageId/image. Mengalirkan berkas gambar.
+
+- Hanya anggota ACTIVE, dan hanya untuk pesan yang terlihat bagi pemanggil (K39). Pesan bukan IMAGE, tidak ada, atau tidak terlihat: 404 not-found, tanpa dibedakan.
+- Header respons: Content-Type sesuai tipe yang terdeteksi saat unggah, X-Content-Type-Options nosniff, dan Cache-Control private, max-age=86400.
+- Header Authorization wajib. Elemen img tidak dapat mengirim header itu, sehingga klien mengambil gambar dengan fetch berheader, lalu menampilkannya lewat blob URL. Hal yang sama berlaku untuk bukti pelunasan (10.4).
+
+### 13.5 Status dibaca dan jumlah belum dibaca
+
+| Endpoint | Fungsi |
+|---|---|
+| POST /api/groups/:groupId/messages/read | Body { messageId }. Menandai pesan sampai id itu sebagai dibaca. 204. |
+| GET /api/me/chat-unread | Jumlah belum dibaca per grup. |
+
+    {
+      "data": [
+        { "groupId": 12, "unreadCount": 3, "lastMessageId": 120 },
+        { "groupId": 15, "unreadCount": 0, "lastMessageId": 48 }
+      ]
+    }
+
+Aturan:
+- Hanya grup tempat pemanggil ACTIVE. unreadCount menghitung pesan dengan id lebih besar dari penanda baca pemanggil, yang terlihat (K39), dan bukan miliknya. Contoh: lastMessageId 120 dan penanda 115. Pesan 116 sampai 120 berjumlah 5, dua milik sendiri, sehingga unreadCount adalah 3.
+- Penanda hanya naik. messageId lebih kecil dari penanda tersimpan diabaikan dan tetap 204. messageId lebih besar dari pesan terakhir: 400 validation-failed.
+- Anggota baru memulai tanpa tunggakan (architecture.md K38). Status dibaca tidak ditampilkan kepada anggota lain.
+
+### 13.6 Kartu sistem
+
+- ITEM_PICK: terbit saat transaksi ITEMIZED menjadi ACTIVE (7.1). Datanya dibaca lewat GET .../transactions/:transactionId/items (7.3).
+- APPROVAL: terbit saat Approval dibuat (6.3). Datanya dibaca lewat GET .../approvals/:approvalId. Semua anggota ACTIVE dapat membacanya, dan canVote tetap dihitung server.
+- Permintaan consent peserta tidak pernah menjadi kartu (K40). Anggota menerimanya lewat notifikasi CONSENT_REQUEST (6.2).
+- Kartu hanya berisi jenis dan id, sehingga status terbaru (REJECTED, EXPIRED, WITHDRAWN, TAKEN_DOWN) langsung tampil pada kartu lama. Satu kartu per subjek.
+- Klien tidak dapat membuat kartu. Kartu ditulis server dalam transaksi peristiwanya (K40).
+- Anggota yang bergabung setelah kartu terbit tidak melihatnya di chat (K39), tetapi tetap dapat membuka transaksinya dari riwayat (9.4).
+
+### 13.7 Event Socket.IO
+
+| Event | Room | Muatan |
+|---|---|---|
+| message:created | group:<id> | { groupId, message } |
+
+- message berbentuk objek pesan 13.1. Pengecualian atas 3.3, karena pesan tidak dapat diubah dan tidak ada risiko data basi.
+- Dikirim setelah transaksi commit, termasuk kepada pengirim. Klien menghapus duplikat berdasarkan id pesan, baik event datang sebelum atau sesudah respons POST.
+- Event hanya diterima anggota yang berada di room grup, dan hanya untuk pesan yang terlihat bagi anggota itu (K39). Anggota yang keluar atau dikeluarkan langsung dicabut dari room (3.2).
+- Event tidak diulang. Setelah koneksi pulih, klien menyusul lewat 13.3 dengan parameter after.
+- Penanda baca tidak disiarkan.
+
+### 13.8 Kode error, batas, dan migrasi
+
+Tidak ada kode error baru. Kode yang dipakai: validation-failed, forbidden, not-found, payload-too-large, unsupported-media-type, dan rate-limited.
+
+Konstanta (architecture.md bagian 4): panjang maksimal 2000 karakter Unicode, 20 pesan per menit, dan 5 gambar per 5 menit per pengguna per grup.
+
+Risiko yang diterima (architecture.md K41): pesan dan gambar tidak dapat ditarik walau terkirim keliru atau melanggar hukum, termasuk oleh admin. Frontend disarankan meminta konfirmasi sebelum mengirim gambar.
+
+Bagian ini tidak mengubah endpoint yang sudah berjalan karena chat belum ada di kode. Koleksi Postman menambah request chat setelah implementasi.
+
+<!-- akhir-bagian-api-11 -->
