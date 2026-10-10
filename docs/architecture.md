@@ -868,7 +868,7 @@ Contoh belum dibaca: lastSeq 120 dan lastReadSeq 115. Pesan 116 sampai 120 berju
 
 Masalah: spesifikasi hanya menyatakan mantan anggota tanpa akses chat. Belum diatur apa yang dilihat anggota baru atau yang bergabung kembali. Riwayat chat lama dapat memuat percakapan antar mantan anggota, atau kartu berisi nama dan nominal yang tidak ditujukan kepada anggota baru.
 
-Perbaikan (default, menunggu konfirmasi):
+Perbaikan:
 - GroupMember.activeSince diisi pada setiap aktivasi: bergabung, bergabung kembali, permintaan disetujui, undangan diterima. joinedAt tetap tanggal pertama.
 - Pesan terlihat bagi anggota ACTIVE hanya bila createdAt lebih besar atau sama dengan activeSince. Pesan sebelum itu tidak muncul di daftar, jumlah belum dibaca, siaran, maupun unduhan gambar.
 - Anggota yang keluar lalu bergabung kembali tidak melihat pesan dari periode sebelumnya. Ini konsekuensi yang diterima demi aturan yang sederhana.
@@ -932,7 +932,7 @@ Token akses:
 - requireAuth tidak membaca database. Konsekuensinya, penggantian password tidak mencabut token akses yang sudah beredar sampai kedaluwarsa. Setelah refresh token tersedia, masa berlakunya 15 menit, sehingga jendela risikonya 15 menit.
 - Variabel lingkungan JWT_EXPIRES_IN berubah dari 1h menjadi 15m pada Tahap 2.
 
-Yang sengaja tidak dibuat (keputusan produk, menunggu konfirmasi):
+Yang semula sengaja tidak dibuat (digantikan K48):
 - Penghapusan akun: akun dirujuk ledger dan riwayat, sehingga tidak dapat dihapus. Sama seperti grup.
 - Penggantian email: email adalah penghubung undangan (K29) dan belum diverifikasi. Mengganti email sama dengan mengambil alih undangan orang lain.
 - Pemulihan kata sandi: tidak ada. Pengguna yang lupa password tidak dapat memulihkan akunnya. Infrastruktur email sudah ada (outbox, SMTP), jadi ini kandidat Tahap 4 bila waktu ada. Risiko yang diterima sampai saat itu.
@@ -947,9 +947,9 @@ Tabel RefreshToken: id, userId, familyId (UUID), tokenHash (SHA-256 heksadesimal
 - Masa berlaku absolut 30 hari sejak login. Rotasi mewarisi expiresAt token sebelumnya, tidak memperpanjangnya, supaya sesi pasti berakhir.
 - Rotasi: setiap refresh yang sah menandai usedAt dan menerbitkan pasangan token baru dalam familyId yang sama. Penandaan atomik: UPDATE dengan syarat usedAt kosong, revokedAt kosong, dan expiresAt belum lewat, lalu periksa jumlah baris terdampak sama dengan 1.
 - Deteksi pemakaian ulang: token yang sudah usedAt dan dipakai lagi mencabut seluruh keluarga (revokedAt), dan jawabannya 401 refresh-reuse. Pengguna harus login ulang di perangkat itu. Maksudnya, token yang dicuri dan dipakai bersama pemilik asli terdeteksi.
-- Refresh bersamaan dari dua tab dianggap pemakaian ulang dan mengeluarkan pengguna. Karena itu klien wajib single-flight (satu permintaan refresh pada satu waktu, tab lain menunggu hasilnya).
+- (Diubah oleh K49) Refresh bersamaan dari dua tab dianggap pemakaian ulang dan mengeluarkan pengguna. Karena itu klien wajib single-flight (satu permintaan refresh pada satu waktu, tab lain menunggu hasilnya).
 - Logout mencabut keluarga. Penggantian password mencabut semua keluarga milik pengguna. Respons penggantian password berisi pasangan token baru untuk perangkat yang melakukannya.
-- Pengiriman: refresh token dikirim dan diterima di body JSON, bukan cookie, karena domain penyebaran frontend dan API belum diketahui (cookie lintas situs butuh SameSite None dan penanganan CSRF). Akibatnya frontend menyimpan token, dan risiko XSS diterima. Mitigasi: CSP, tidak memakai dangerouslySetInnerHTML, dan semua teks pengguna dirender sebagai teks (2.2). Bila kelak frontend dan API satu situs, cookie httpOnly menjadi alternatif.
+- (Diubah oleh K49) Pengiriman: refresh token dikirim dan diterima di body JSON, bukan cookie, karena domain penyebaran frontend dan API belum diketahui (cookie lintas situs butuh SameSite None dan penanganan CSRF). Akibatnya frontend menyimpan token, dan risiko XSS diterima. Mitigasi: CSP, tidak memakai dangerouslySetInnerHTML, dan semua teks pengguna dirender sebagai teks (2.2). Bila kelak frontend dan API satu situs, cookie httpOnly menjadi alternatif.
 - Baris RefreshToken yang kedaluwarsa dibersihkan job terjadwal (Tahap 4). Tabel ini bukan catatan audit dan boleh dihapus.
 - Aksi auth (login, refresh, logout, penggantian password) ditulis ke AuditLog tingkat pengguna tanpa groupId, atau log aplikasi, dengan alamat IP. Pilihan penyimpanannya ditetapkan saat implementasi dan tidak dijanjikan sebagai riwayat grup.
 
@@ -971,7 +971,7 @@ Keputusan:
 - Pemulihan kata sandi: Tahap 2, bersama refresh token (K50).
 - Ganti email: Tahap 3 (K51).
 - Hapus akun lewat anonimisasi: Tahap 4 (K52).
-- Verifikasi email tidak diwajibkan saat pendaftaran maupun untuk menerima undangan (default diterima tim, menunggu konfirmasi bila tafsirannya keliru). Risiko K29 tetap: akun yang didaftarkan dengan email orang lain dapat menerima undangan yang ditujukan ke pemilik aslinya. Alamat baru pada ganti email terverifikasi karena pemiliknya harus membuka tautan, tetapi akun tidak menyimpan penanda terverifikasi.
+- Verifikasi email tidak diwajibkan saat pendaftaran maupun untuk menerima undangan (default diterima tim). Risiko K29 tetap: akun yang didaftarkan dengan email orang lain dapat menerima undangan yang ditujukan ke pemilik aslinya. Alamat baru pada ganti email terverifikasi karena pemiliknya harus membuka tautan, tetapi akun tidak menyimpan penanda terverifikasi.
 
 Ketergantungan dan perubahan ERD:
 - Layanan pengiriman email produksi belum diputuskan (menunggu instruksi asisten praktikum bersama Azure). Mailpit hanya untuk pengembangan. Tanpa layanan itu, alur reset, konfirmasi ganti email, dan pemberitahuan hanya berjalan lokal.
