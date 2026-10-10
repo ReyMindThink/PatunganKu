@@ -80,6 +80,11 @@ Semua nilai ini disimpan di apps/backend/src/config/constants.js dan tidak ditul
 | Masa berlaku refresh token | 30 hari sejak login, tidak diperpanjang oleh rotasi (usulan) |
 | Batas percobaan login | 10 per 15 menit per pasangan IP dan email, dan 50 per 15 menit per IP (usulan) |
 | Batas pendaftaran akun | 10 per jam per IP (usulan) |
+| Masa berlaku token reset kata sandi | 1 jam, sekali pakai |
+| Masa berlaku token ganti email | 24 jam, sekali pakai (usulan) |
+| Toleransi refresh bersamaan | 10 detik (usulan) |
+| Batas pengiriman email reset per akun | 3 per jam, diam-diam (usulan) |
+| Batas aksi sensitif akun | 5 per 15 menit per pengguna, satu hitungan bersama untuk ganti password, ganti email, dan hapus akun (usulan) |
 | Kuorum merata (lebih dari 50% pemilih) | floor(n / 2) + 1 |
 | Kuorum admin tunggal (20% pemilih) | min(5, max(1, ceil(n / 5))), dihitung dengan bilangan bulat |
 
@@ -957,3 +962,96 @@ Tabel RefreshToken: id, userId, familyId (UUID), tokenHash (SHA-256 heksadesimal
 - Pembatas disimpan di memori proses (satu instance dulu). Tidak berlaku bila skala horizontal.
 
 <!-- akhir-bagian-10h -->
+
+### K48. Tiga fitur akun masuk (menggantikan bagian "Yang sengaja tidak dibuat" pada K45)
+
+Masalah: K45 menyatakan tidak ada pemulihan kata sandi, ganti email, dan hapus akun, dengan alasan keamanan dan cakupan. Pengguna yang lupa password kehilangan akunnya, dan produk tanpa fitur itu tidak layak untuk pengguna sungguhan. Alasan keamanan bukan alasan menolak bila jebakannya sudah ditutup di rancangan.
+
+Keputusan:
+- Pemulihan kata sandi: Tahap 2, bersama refresh token (K50).
+- Ganti email: Tahap 3 (K51).
+- Hapus akun lewat anonimisasi: Tahap 4 (K52).
+- Verifikasi email tidak diwajibkan saat pendaftaran maupun untuk menerima undangan (default diterima tim, menunggu konfirmasi bila tafsirannya keliru). Risiko K29 tetap: akun yang didaftarkan dengan email orang lain dapat menerima undangan yang ditujukan ke pemilik aslinya. Alamat baru pada ganti email terverifikasi karena pemiliknya harus membuka tautan, tetapi akun tidak menyimpan penanda terverifikasi.
+
+Ketergantungan dan perubahan ERD:
+- Layanan pengiriman email produksi belum diputuskan (menunggu instruksi asisten praktikum bersama Azure). Mailpit hanya untuk pengembangan. Tanpa layanan itu, alur reset, konfirmasi ganti email, dan pemberitahuan hanya berjalan lokal.
+- Variabel lingkungan APP_BASE_URL berisi alamat frontend (https di produksi) untuk menyusun tautan.
+- Tabel AccountToken: id, userId, purpose (PASSWORD_RESET atau EMAIL_CHANGE), tokenHash (SHA-256 heksadesimal, unik), newEmail (hanya EMAIL_CHANGE, huruf kecil), createdAt, expiresAt, usedAt, revokedAt.
+- User.deletedAt (kosong untuk akun aktif).
+- EmailOutbox: toUserId menjadi opsional dan ditambah toEmail (wajib), karena email konfirmasi ganti email dikirim ke alamat yang belum menjadi milik akun mana pun.
+- PaymentMethod.accountNo, accountName, dan provider dibuat nullable untuk anonimisasi.
+- Payload EmailOutbox dapat memuat token mentah (di dalam tautan). Payload dikosongkan saat status SENT atau FAILED akhir dan tidak pernah ditulis ke log. Selama menunggu pengiriman, kebocoran basis data membuka token yang masih berlaku, dan masa berlaku yang pendek membatasi risikonya.
+- Template email: PASSWORD_RESET, PASSWORD_CHANGED, EMAIL_CHANGE_CONFIRM (ke alamat baru), EMAIL_CHANGE_NOTICE (ke alamat lama saat permintaan), EMAIL_CHANGED (ke alamat lama setelah selesai), dan ACCOUNT_DELETED (ke alamat lama, dibuat sebelum anonimisasi). Email tidak memuat password maupun nomor rekening.
+
+### K49. Transport refresh token dua mode, dan toleransi refresh bersamaan (mengubah K46)
+
+Masalah 1: domain penyebaran belum diketahui. Cookie httpOnly lebih aman daripada body karena JavaScript tidak dapat membacanya, tetapi hanya andal bila frontend dan API satu situs. Memilih salah satu sekarang berarti menebak.
+
+Perbaikan 1:
+- Variabel lingkungan REFRESH_TOKEN_TRANSPORT bernilai body (bawaan) atau cookie. Respons membawa refreshMode: NONE (sebelum Tahap 2), BODY, atau COOKIE. Klien menyesuaikan diri.
+- Mode cookie: refresh_token, HttpOnly, Secure, SameSite=Strict, Path=/api/auth, Max-Age sama dengan sisa detik sampai masa berlaku absolut (maksimal 2.592.000 detik, yaitu 30 hari).
+- Cookie lintas situs (SameSite=None) tidak dibangun. Bila frontend dan API lintas situs, gunakan mode body.
+- Pada mode cookie, refresh dan logout wajib membawa header X-Requested-With bernilai patunganku. Ini lapisan CSRF tambahan: permintaan lintas asal dengan header khusus memicu preflight CORS.
+- Produksi: CORS_ORIGIN harus berisi daftar asal yang persis, bukan tanda bintang. Nilai bawaan sekarang adalah tanda bintang. env.js menolak tanda bintang bila NODE_ENV adalah production, dan mode cookie mengirim Access-Control-Allow-Credentials.
+- Perilaku cookie Secure pada http://localhost berbeda antar peramban dan belum diuji untuk dokumen ini. Bawaan lokal adalah mode body, dan mode cookie diuji di lingkungan https.
+- Risiko yang diterima: dua jalur kode yang harus dites. Mode cookie menutup pencurian token oleh XSS, tetapi tidak penyalahgunaan sesi selama halaman terbuka.
+
+Masalah 2: K46 menyatakan dua refresh bersamaan dianggap pemakaian ulang dan mengeluarkan pengguna. Dua tab terbuka yang kebetulan refresh bersamaan akan mengeluarkan pengguna tanpa serangan apa pun.
+
+Perbaikan 2 (menggantikan butir itu di K46):
+- Bila token yang sudah usedAt dipakai lagi dalam 10 detik sejak usedAt, dan token penggantinya (replacedByTokenId) belum dipakai serta keluarga belum dicabut: 409 refresh-conflict. Keluarga tidak dicabut dan tidak ada token yang diterbitkan. Klien membaca ulang token tersimpan (mode cookie terkirim otomatis) lalu mengulang sekali.
+- Selain itu (lewat 10 detik, atau penggantinya sudah dipakai): pemakaian ulang sejati, 401 refresh-reuse dan seluruh keluarga dicabut.
+- Respons 409 tidak mengeluarkan token. Pencuri yang memutar ulang token lama dalam 10 detik tidak mendapat apa pun, dan akibatnya hanya deteksi pencurian yang tertunda.
+- Klien tetap mengunci antar tab dengan navigator.locks bila tersedia. Dukungan peramban lama tidak diperiksa.
+
+Contoh: refresh pertama pukul 09:00:00 menandai usedAt dan menerbitkan token T2. Permintaan berikutnya dengan T1 pukul 09:00:03 (selisih 3 detik) menghasilkan 409 refresh-conflict. Permintaan dengan T1 pukul 09:00:12 (selisih 12 detik) menghasilkan 401 refresh-reuse dan keluarga dicabut.
+
+<!-- akhir-bagian-10h2 -->
+
+### K50. Pemulihan kata sandi (Tahap 2)
+
+Jebakan yang ditutup:
+- Permintaan selalu dijawab 202 dengan isi sama untuk email terdaftar dan tidak. Catatan jujur: karena pendaftaran sudah membuka status email (K43), kesamaan ini bukan perlindungan penuh, melainkan agar fitur ini tidak menambah jalur uji baru. Perbedaan waktu respons tidak diratakan.
+- Token berupa 32 byte acak, hanya hash yang disimpan, berlaku 1 jam, sekali pakai. Permintaan baru mencabut token reset yang belum dipakai milik akun itu.
+- Tautan berbentuk APP_BASE_URL ditambah /reset-password#token=nilai. Fragmen tidak dikirim ke server dan tidak masuk header Referer. Frontend membaca fragmen, menghapusnya dengan history.replaceState sebelum permintaan jaringan apa pun, dan tidak mencatatnya.
+- Batas: 3 per jam per pasangan (IP, email) dan 10 per jam per IP, dengan 429 rate-limited. Pengiriman email sendiri dibatasi diam-diam 3 per jam per akun (tetap 202, tidak ada email) untuk mencegah pembanjiran email korban dari banyak IP. Akibat yang diterima: penyerang dapat menahan pemulihan korban dengan menghabiskan batas itu secara terus-menerus.
+- Akun terhapus tidak menerima email, dan permintaannya tetap dijawab 202.
+
+Hasil reset: password diganti, token ditandai usedAt, semua AccountToken lain yang belum dipakai milik akun dicabut, semua refresh token dicabut, dan email PASSWORD_CHANGED dikirim ke alamat akun. Tidak ada login otomatis. Token akses yang sudah beredar berlaku sampai kedaluwarsa, paling lama 15 menit (K45).
+
+### K51. Ganti email (Tahap 3)
+
+Mengapa berbahaya bila sembarangan: email adalah kunci undangan (K29). Mengganti email tanpa bukti kepemilikan sama dengan merebut undangan orang lain.
+
+Penutupnya:
+- Wajib password. Token dikirim ke alamat baru, dan email baru berlaku hanya setelah tautan dibuka.
+- Token berlaku 24 jam, sekali pakai, mengikat userId dan newEmail. Permintaan baru mencabut token ganti email sebelumnya.
+- Alamat baru yang sudah dipakai akun lain: 409 email-taken pada permintaan dan pada konfirmasi. Ini membuka status email, setara pendaftaran (K43).
+- Konfirmasi tidak membutuhkan sesi login: kepemilikan token berarti kepemilikan kotak surat baru, dan permintaannya sudah diautentikasi dengan password saat dibuat. Tautan yang dibuka di perangkat lain tetap berfungsi.
+- Saat permintaan dibuat, EMAIL_CHANGE_NOTICE dikirim ke alamat lama (alamat baru disamarkan). Saat selesai, email berganti (huruf kecil), semua refresh token dicabut sehingga semua perangkat login ulang, dan EMAIL_CHANGED dikirim ke alamat lama.
+
+Batas yang jujur:
+- Penyerang yang sudah memiliki password dan kotak surat baru dapat mengambil alih akun. Pemberitahuan ke alamat lama hanya peringatan dini, bukan pencegahan, dan tidak ada tautan pembatalan.
+- Undangan tertunda ke alamat lama tidak lagi terlihat oleh akun ini. Alamat lama menjadi bebas didaftarkan siapa pun, yang lalu melihat undangan yang ditujukan ke alamat itu. Ini risiko K29 dan K43 yang sama dan diterima.
+
+### K52. Hapus akun lewat anonimisasi (Tahap 4)
+
+Prinsip: ledger, riwayat, dan chat bersifat permanen dan merujuk akun ini. Penghapusan fisik merusak catatan orang lain.
+
+Syarat (tidak dapat dilewati admin, berbeda dengan K31): bukan OWNER di grup mana pun, bukan pemegang dana (termasuk pemegang terakhir dana CLOSED yang masih punya saldo tidak nol, K36), saldo nol pada semua pasangan di semua grup termasuk grup yang sudah ditinggalkan, dan tidak ada pelunasan PENDING sebagai pengirim maupun penerima. Alasannya: menghapus akun tidak boleh menjadi jalan keluar dari utang.
+
+Dalam satu transaksi database:
+1. Keluar dari semua grup dengan penyelesaian otomatis seperti K31 (DRAFT dihapus, PENDING_APPROVAL ditarik, ITEMIZED CLAIMING difinalisasi, HOLDING dilepas, penunjukan dibatalkan, consent PENDING menjadi REJECTED). Penunjukan pemegang dana yang tertunda dibatalkan.
+2. Email ACCOUNT_DELETED dimasukkan ke outbox untuk alamat lama sebelum anonimisasi.
+3. Anonimisasi: email menjadi deleted-ID@deleted.invalid (ID adalah id pengguna), name menjadi Pengguna terhapus, passwordHash diganti hash dari 32 byte acak yang dibuang, notifyByEmail false, deletedAt diisi.
+4. PaymentMethod dinonaktifkan dan accountNo, accountName, provider dikosongkan (baris dipertahankan karena pelunasan lama merujuknya).
+5. Notification dan EmailOutbox yang belum terkirim dihapus. RefreshToken dan AccountToken dihapus. Undangan tertunda ke alamat lama menjadi CANCELLED.
+
+Yang tetap ada: baris ledger, transaksi, riwayat, isi dan gambar chat, struk, dan bukti pelunasan, tampil dengan nama Pengguna terhapus dan keanggotaan LEFT. Gambar bukti transfer dan chat mungkin memuat data pribadi. Semuanya tidak dihapus karena menjadi bukti bagi pihak lawan dan karena pesan bersifat permanen. Penghapusan data pribadi yang penuh bertabrakan dengan keputusan pesan permanen, jadi dicatat sebagai keterbatasan. Isi UU Pelindungan Data Pribadi tidak diperiksa untuk dokumen ini, dan perlu ditanyakan ke dosen atau asisten bila dibutuhkan.
+
+Akibat lain:
+- Penghapusan tidak dapat dipulihkan. Alamat email lama menjadi bebas didaftarkan ulang sebagai akun baru, yang tidak punya hubungan dengan data lama.
+- Token akses yang sudah beredar berlaku sampai kedaluwarsa (paling lama 15 menit). Endpoint /api/me menolak akun terhapus dengan 401 unauthorized, dan endpoint grup menolak karena keanggotaan LEFT.
+- Aksi dicatat di log keamanan tingkat pengguna (K46) beserta alamat IP.
+
+<!-- akhir-bagian-10i -->

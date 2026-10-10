@@ -1530,7 +1530,7 @@ Bagian ini tidak mengubah endpoint yang sudah berjalan karena chat belum ada di 
 
 - Awalan rute: /api/auth (daftar, masuk, token) dan /api/me (profil dan pengaturan sendiri). Endpoint /api/auth/register, /login, dan /refresh tidak butuh header Authorization. Endpoint auth tidak memakai Idempotency-Key: pendaftaran sudah dijaga keunikan email, dan login serta refresh tidak membuat catatan.
 - Ada dua token. accessToken adalah JWT yang dikirim pada header Authorization (2.2). refreshToken adalah token buram yang hanya dipakai pada endpoint refresh dan logout (architecture.md K46). Klien tidak membaca isi JWT.
-- Sebelum Tahap 2, refreshToken bernilai null dan expiresIn 3600. Sesudah Tahap 2, refreshToken terisi dan expiresIn 900. Klien menangani keduanya: bila refreshToken null, token habis berarti login ulang.
+- Sebelum Tahap 2, refreshToken bernilai null dan expiresIn 3600. Sesudah Tahap 2, refreshToken terisi dan expiresIn 900. Klien menangani keduanya: bila refreshToken null, token habis berarti login ulang. Field refreshMode dan mode cookie dijelaskan di 14.7.
 - expiresIn dalam detik, sejak respons diterima.
 
 Respons daftar dan masuk:
@@ -1574,7 +1574,7 @@ Aturan:
 
 Aturan klien (wajib):
 1. Klien hanya mencoba refresh ketika menerima 401 dengan code unauthorized (token akses tidak ada, tidak valid, atau kedaluwarsa). Kode invalid-credentials, invalid-refresh-token, dan refresh-reuse tidak memicu refresh.
-2. Refresh bersifat single-flight: hanya satu permintaan refresh pada satu waktu. Permintaan lain, termasuk dari tab lain, menunggu hasilnya. Dua refresh bersamaan dianggap pemakaian ulang dan mengeluarkan pengguna (K46).
+2. Refresh bersifat single-flight: hanya satu permintaan refresh pada satu waktu. Permintaan lain, termasuk dari tab lain, menunggu hasilnya. Dua refresh bersamaan dalam 10 detik ditoleransi lewat refresh-conflict (14.7), tetapi tetap dihindari.
 3. Setelah refresh berhasil, permintaan yang gagal diulang tepat satu kali dengan Idempotency-Key yang sama (2.6). Bila refresh gagal, klien menampilkan layar login.
 4. Koneksi Socket.IO yang diputus dengan alasan token-expired (3.1) disambung ulang dengan token baru setelah refresh, lalu klien mengambil ulang data yang tampil (3.3).
 
@@ -1585,7 +1585,7 @@ Aturan klien (wajib):
 | Endpoint | Fungsi |
 |---|---|
 | GET /api/me | Profil saya (objek user 14.1). Menggantikan GET /api/auth/me. |
-| PATCH /api/me | Body { name }. 200 dengan profil terbaru. Email tidak dapat diubah (architecture.md K45). |
+| PATCH /api/me | Body { name }. 200 dengan profil terbaru. Email diubah lewat alur terpisah (14.9). |
 | POST /api/me/password | Body { currentPassword, newPassword }. 200 dengan { data: { accessToken, refreshToken, expiresIn } }. |
 
 Aturan:
@@ -1593,7 +1593,7 @@ Aturan:
 - newPassword mengikuti aturan password 14.2. Password saat ini salah: 400 validation-failed dengan errors berisi { field: "currentPassword", message: "Password saat ini salah" }. Kode ini sengaja bukan 401, supaya klien tidak mencoba refresh.
 - Penggantian password mencabut semua refresh token pengguna di semua perangkat (K46) dan menerbitkan pasangan token baru untuk perangkat yang mengubahnya. Token akses lama di perangkat lain tetap berlaku sampai kedaluwarsa, paling lama 15 menit.
 - Penggantian password dibatasi 5 kali per 15 menit per pengguna (14.5).
-- Tidak ada penghapusan akun, penggantian email, atau pemulihan kata sandi (K45). Pengguna yang lupa password tidak dapat memulihkan akunnya sampai fitur itu ada.
+- Pemulihan kata sandi ada di 14.8, penggantian email di 14.9, dan penghapusan akun di 14.10 (architecture.md K48 sampai K52).
 
 ### 14.5 Batas laju
 
@@ -1605,7 +1605,10 @@ Terlampaui: 429 rate-limited dengan header Retry-After (dalam detik).
 | POST /api/auth/login | 50 per 15 menit | IP |
 | POST /api/auth/register | 10 per jam | IP |
 | POST /api/auth/refresh | 60 per 15 menit | IP |
-| POST /api/me/password | 5 per 15 menit | Pengguna |
+| POST /api/auth/password/forgot | 3 per jam | Pasangan IP dan email |
+| POST /api/auth/password/forgot | 10 per jam | IP |
+| POST /api/auth/password/reset dan POST /api/auth/email/confirm | 10 per jam | IP |
+| POST /api/me/password, POST /api/me/email/change, dan POST /api/me/deletion | 5 per 15 menit, satu hitungan bersama | Pengguna |
 
 Dua catatan (architecture.md K47):
 - Pembatas per email saja tidak dipakai karena penyerang dapat mengunci akun korban.
@@ -1617,6 +1620,9 @@ Dua catatan (architecture.md K47):
 |---|---|---|
 | invalid-refresh-token | 401 | Refresh token tidak dikenal, kedaluwarsa, atau dicabut. |
 | refresh-reuse | 401 | Refresh token yang sudah dipakai dipakai lagi. Seluruh keluarga dicabut. |
+| refresh-conflict | 409 | Refresh bersamaan dalam 10 detik: token pengganti sudah diterbitkan oleh permintaan lain. Tidak ada token yang dikeluarkan dan keluarga tidak dicabut. Klien membaca ulang token tersimpan lalu mengulang sekali (14.7). |
+| invalid-account-token | 400 | Token reset kata sandi atau konfirmasi ganti email tidak dikenal, kedaluwarsa, atau sudah dipakai. |
+| delete-blocked | 409 | Akun tidak dapat dihapus. Berisi blockers (14.10). |
 
 Kode yang sudah ada dipakai untuk kondisi lain: unauthorized, invalid-credentials, email-taken, validation-failed, dan rate-limited.
 
@@ -1634,3 +1640,115 @@ Migrasi endpoint yang sudah berjalan:
 Koleksi Postman (docs/postman/build.mjs) diperbarui mengikuti perubahan di atas.
 
 <!-- akhir-bagian-api-12 -->
+
+### 14.7 Transport refresh token (mengubah 14.1 dan 14.3)
+
+Variabel lingkungan REFRESH_TOKEN_TRANSPORT bernilai body (bawaan) atau cookie (architecture.md K49). Setiap respons yang menerbitkan token (daftar, masuk, refresh, penggantian password) membawa refreshMode: NONE (sebelum Tahap 2), BODY, atau COOKIE.
+
+Mode BODY:
+
+    {
+      "data": {
+        "user": { "id": 4, "email": "rey@example.com", "name": "Rey", "notifyByEmail": false, "createdAt": "2026-10-01T08:00:00.000Z" },
+        "accessToken": "<jwt>",
+        "refreshToken": "<token>",
+        "refreshMode": "BODY",
+        "expiresIn": 900
+      }
+    }
+
+Mode COOKIE: refreshToken bernilai null, refreshMode COOKIE, dan respons membawa header
+
+    Set-Cookie: refresh_token=<token>; Max-Age=2592000; Path=/api/auth; HttpOnly; Secure; SameSite=Strict
+
+Max-Age adalah sisa detik sampai masa berlaku absolut (paling banyak 30 hari, yaitu 2.592.000 detik). Refresh tidak memperpanjangnya.
+
+Aturan:
+- Mode COOKIE: POST /api/auth/refresh dan /api/auth/logout tidak memakai body. Keduanya wajib membawa header X-Requested-With bernilai patunganku. Tanpa header itu: 400 validation-failed. Logout menghapus cookie (Max-Age 0).
+- Mode COOKIE hanya didukung bila frontend dan API satu situs. Cookie lintas situs tidak dibangun. Bila lintas situs, gunakan mode BODY.
+- Mode BODY: refreshToken dikirim di body refresh dan logout (14.3).
+
+Aturan klien (menggantikan butir 2 pada 14.3):
+1. Klien membaca refreshMode dari respons. NONE: tidak ada refresh. BODY: simpan refreshToken dan kirim di body. COOKIE: simpan tidak ada apa pun, panggil refresh dan logout tanpa body, dengan fetch memakai credentials include dan header X-Requested-With.
+2. Refresh bersifat single-flight, termasuk antar tab, dengan navigator.locks bila tersedia.
+3. Menerima 409 refresh-conflict: tunggu sebentar (disarankan 300 milidetik), baca ulang token tersimpan (mode BODY dari penyimpanan karena tab lain sudah menyimpan hasilnya, mode COOKIE otomatis), lalu ulangi sekali. Bila masih gagal, tampilkan layar login.
+4. Pemakaian ulang token lama lebih dari 10 detik kemudian, atau setelah penggantinya dipakai, menghasilkan 401 refresh-reuse dan keluarga dicabut (K49).
+
+### 14.8 Pemulihan kata sandi (Tahap 2)
+
+| Endpoint | Fungsi |
+|---|---|
+| POST /api/auth/password/forgot | Body { email }. Selalu 202 dengan { data: { accepted: true } }. Tanpa Authorization. |
+| POST /api/auth/password/reset | Body { token, newPassword }. 204. Tanpa Authorization. |
+
+Aturan forgot (architecture.md K50):
+- Format email salah: 400 validation-failed. Selain itu jawabannya selalu 202 dan sama, baik email terdaftar atau tidak. Ini tidak melindungi penuh karena pendaftaran sudah membuka status email (K43). Perbedaan waktu respons tidak diratakan.
+- Bila akun ada: dibuat token reset, token reset lama yang belum dipakai dicabut, dan email PASSWORD_RESET masuk outbox dengan tautan APP_BASE_URL ditambah /reset-password#token=nilai. Token berlaku 1 jam dan sekali pakai.
+- Batas: 3 per jam per pasangan (IP, email) dan 10 per jam per IP (14.5), dengan 429 rate-limited. Pengiriman email dibatasi diam-diam 3 per jam per akun: tetap 202 tetapi tidak ada email.
+
+Aturan reset:
+- Token tidak dikenal, kedaluwarsa, atau sudah dipakai: 400 invalid-account-token. newPassword mengikuti aturan password 14.2 (400 validation-failed).
+- Hasil: password diganti, token ditandai terpakai, semua token akun lain yang belum dipakai dicabut, semua refresh token dicabut, dan email PASSWORD_CHANGED dikirim. Tidak ada login otomatis. Klien mengarahkan pengguna ke layar login.
+- Token akses yang sudah beredar berlaku sampai kedaluwarsa, paling lama 15 menit.
+
+Aturan frontend untuk halaman reset:
+- Baca token dari fragmen URL, hapus fragmen dengan history.replaceState sebelum permintaan jaringan apa pun, dan jangan mencatat tokennya.
+
+<!-- akhir-bagian-api-12b -->
+
+### 14.9 Ganti email (Tahap 3)
+
+| Endpoint | Fungsi |
+|---|---|
+| POST /api/me/email/change | Body { newEmail, password }. 202 dengan { data: { accepted: true } }. |
+| POST /api/auth/email/confirm | Body { token }. 204. Tanpa Authorization. |
+
+Aturan permintaan (architecture.md K51):
+- password salah: 400 validation-failed dengan errors berisi { field: "password", message: "Password salah" }. Bukan 401, supaya klien tidak mencoba refresh.
+- newEmail dipangkas dan diubah ke huruf kecil. Format salah, atau sama dengan email sekarang: 400 validation-failed. Sudah dipakai akun lain: 409 email-taken. Ini membuka status email, setara pendaftaran (K43).
+- Token berlaku 24 jam, sekali pakai, mengikat akun dan newEmail. Permintaan baru mencabut token ganti email sebelumnya. Email EMAIL_CHANGE_CONFIRM dikirim ke alamat baru dengan tautan APP_BASE_URL ditambah /confirm-email#token=nilai. EMAIL_CHANGE_NOTICE dikirim ke alamat lama, dengan alamat baru disamarkan.
+- Dibatasi bersama hitungan aksi sensitif: 5 per 15 menit per pengguna (14.5).
+
+Aturan konfirmasi:
+- Token tidak dikenal, kedaluwarsa, atau sudah dipakai: 400 invalid-account-token. Alamat baru ternyata sudah dipakai akun lain: 409 email-taken, dan token dicabut.
+- Hasil: email berganti, semua refresh token dicabut sehingga semua perangkat login ulang, dan EMAIL_CHANGED dikirim ke alamat lama. Klien mengarahkan pengguna ke layar login.
+- Konfirmasi tidak butuh sesi login. Kepemilikan token berarti kepemilikan kotak surat baru, dan permintaannya sudah diautentikasi dengan password.
+- Undangan tertunda ke alamat lama tidak lagi terlihat oleh akun ini, dan undangan ke alamat baru mulai terlihat. Alamat lama menjadi bebas didaftarkan siapa pun, dan pendaftar itu melihat undangan yang ditujukan ke alamat tersebut. Risiko ini diterima (K51).
+
+### 14.10 Hapus akun (Tahap 4)
+
+| Endpoint | Fungsi |
+|---|---|
+| POST /api/me/deletion | Body { password, confirm: "HAPUS" }. 204. |
+
+Aturan (architecture.md K52):
+- password salah atau confirm bukan HAPUS: 400 validation-failed. Dibatasi bersama hitungan aksi sensitif (14.5).
+- Bila ada penghalang: 409 delete-blocked dengan field blockers. Penghalang tidak dapat dilewati siapa pun, termasuk admin.
+
+    {
+      "type": "about:blank",
+      "title": "Conflict",
+      "status": 409,
+      "code": "delete-blocked",
+      "detail": "Akun tidak dapat dihapus.",
+      "blockers": [
+        { "code": "OWNER", "group": { "id": 12, "name": "Kos Melati" } },
+        { "code": "BALANCE", "group": { "id": 15, "name": "KKN Desa" }, "owes": 0, "owed": 15000 },
+        { "code": "FUND_HOLDER", "group": { "id": 12, "name": "Kos Melati" } },
+        { "code": "PENDING_PAYMENT", "group": { "id": 15, "name": "KKN Desa" }, "paymentId": 801 }
+      ]
+    }
+
+| Penghalang | Arti |
+|---|---|
+| OWNER | Pengguna adalah OWNER. Serahkan kepemilikan dulu (11.5). |
+| FUND_HOLDER | Pengguna pemegang dana, atau pemegang terakhir dana CLOSED yang Dana-nya masih bersaldo tidak nol. |
+| BALANCE | Saldo tidak nol pada pasangan mana pun, termasuk di grup yang sudah ditinggalkan. Contoh: dipiutangi Rp15.000 dan tidak berutang apa pun, tetap saldo tidak nol. |
+| PENDING_PAYMENT | Ada pelunasan PENDING sebagai pengirim atau penerima. |
+
+Hasil bila lolos:
+- Satu transaksi database: keluar dari semua grup dengan penyelesaian otomatis seperti K31, lalu anonimisasi (email, nama, password, metode pembayaran), pencabutan token, dan pembatalan undangan tertunda ke alamat lama. Rinciannya di architecture.md K52.
+- Yang tetap ada: ledger, transaksi, riwayat, chat, struk, dan bukti pelunasan. Semuanya tampil dengan nama Pengguna terhapus. Penghapusan data pribadi yang penuh tidak tercapai karena pesan bersifat permanen.
+- Tidak dapat dipulihkan. Akses setelahnya: endpoint /api/me menolak akun terhapus dengan 401 unauthorized, token akses lama berlaku paling lama 15 menit, dan semua token refresh dicabut.
+
+<!-- akhir-bagian-api-12c -->
