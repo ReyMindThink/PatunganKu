@@ -359,3 +359,44 @@ Garis potong. Bila waktu habis di tengah jalan, yang diserahkan tetap produk utu
 | Socket.IO di Tahap 2 | Tetap Tahap 2 | Event modul Tahap 1 dinyalakan di T2.7. Sebelum itu klien mengambil ulang lewat REST |
 
 <!-- akhir-roadmap -->
+
+## 14. Daftar issue
+
+Issue dibuat dari bagian berpenanda di dokumen ini menggunakan template Task. Issue anak per modul (misalnya T1.1) dibuat saat tahapnya dimulai, berjudul dengan kode modul, diberi label tahap yang sesuai, dan dirujuk dari checklist issue tahap.
+
+| Nomor | Issue | Label |
+|---|---|---|
+| #41 | Tahap 0: Penutupan rancangan | tahap-0, documentation |
+| #42 | Tahap 1: Inti nilai jual | tahap-1 |
+| #43 | Tahap 2: Pembeda | tahap-2 |
+| #44 | Tahap 3: Pendukung | tahap-3 |
+| #45 | Tahap 4: Pengerasan | tahap-4 |
+| #46 | Tahap 5: Chatbot dan penyebaran Azure | tahap-5 |
+| #47 | Lintas A: Sinkronisasi dokumen dan laporan | lintas, documentation |
+| #48 | Lintas B: Kontrak AI dan akurasi resmi | lintas |
+| #49 | Lintas C: Rotasi secret sebelum demo publik | lintas |
+
+### 14.1 Aturan sumber
+
+1. Dokumen ini adalah sumber definisi (isi tahap, deliverable, acceptance criteria). Issue adalah sumber status (kotak yang dicentang).
+2. Perubahan definisi dilakukan di dokumen ini dan di issue yang bersangkutan, dengan tangan lewat halaman issue. Isi issue tidak ditimpa dengan perintah gh issue edit --body-file, karena itu menghapus centang yang sudah ada.
+3. Kotak dicentang hanya bila buktinya terlampir (aturan 2 dan 3 di bagian 1).
+
+### 14.2 Issue lama dan kaitannya
+
+Tidak ada issue lama yang ditutup. Penutupan hanya dengan bukti tes.
+
+| Issue lama | Pemilik | Kaitan | Catatan |
+|---|---|---|---|
+| #12 Konfigurasi Azure Database (SQL) | Rasyid | T5.2 di #46 | Menunggu instruksi dan izin asisten praktikum |
+| #13 Konfigurasi Azure Blob Storage | Rasyid | T5.2 di #46 | Sama dengan #12 |
+| #16 Fine-tuning YOLOv8 dan evaluasi akurasi | Bintang | #48 dan T5.3 di #46 | Kontrak keluaran model perlu disepakati |
+| #17 Antarmuka webapp mobile | Aqidatul | Item F di #42 sampai #45 | Payung frontend. Ditutup setelah semua item F selesai dan terbukti |
+| #19 Menghubungkan frontend ke Azure Storage/DB | Aqidatul | F1.1 di #42 dan T5.2 di #46 | Frontend hanya memakai API backend. Judul perlu disesuaikan (menunggu persetujuan) |
+| #20 Pengujian fungsional sistem | Rasyid | Acceptance criteria #42 sampai #46, T1.2, T1.11 | Payung pengujian akhir |
+| #21 Audit keamanan sistem dan data | Rasyid | T4.4 di #45 dan #49 | Berdasar architecture.md K42 sampai K52 |
+| #22 Memperbaiki bug hasil testing | Rasyid | Setelah #20 | Belum ada perubahan |
+| #23 Build aplikasi versi final | Tim | T5.2 di #46 | Perlu dikonfirmasi: APK atau PWA yang disebarkan di web |
+| #15 dan #18 (tertutup) | Rasyid | #42 | Tindak lanjut tercakup di Tahap 1: saldo dari ledger, dan CHARGE hanya setelah transaksi lolos |
+
+<!-- akhir-roadmap-daftar -->
