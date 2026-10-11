@@ -6,7 +6,7 @@ Peta singkat dari kontrak API untuk pengembang frontend. Bentuk request dan resp
 
 - Status: rancangan Tahap 0. Backend yang berjalan sekarang hanya endpoint lama (auth, grup, transaksi, saldo, pelunasan, struk) dengan bentuk respons lama. Semua yang ada di kontrak adalah rancangan yang akan menggantikannya. Bangun frontend dengan lapisan mock yang mengikuti kontrak, bukan bentuk lama.
 - Nama layar di bagian 3 diturunkan dari spesifikasi produk, bukan dari desain Hi-Fi. Cocokkan dengan layar yang sebenarnya, dan laporkan layar yang tidak punya padanan atau yang butuh data yang tidak ada di objek kontrak.
-- Tahap backend menunjukkan kapan endpoint tersedia. Pembagian ini dari rencana kerja dan dapat bergeser.
+- Tahap backend menunjukkan kapan endpoint tersedia. Pembagian ini dari rencana kerja (docs/roadmap.md) dan dapat bergeser. Event Socket.IO di bagian 3 baru tersedia sejak Tahap 2. Sebelum itu ambil ulang data lewat REST saat layar dibuka dan setelah setiap aksi.
 
 | Tahap | Isi untuk frontend |
 |---|---|
