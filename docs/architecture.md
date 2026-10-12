@@ -1055,3 +1055,23 @@ Akibat lain:
 - Aksi dicatat di log keamanan tingkat pengguna (K46) beserta alamat IP.
 
 <!-- akhir-bagian-10i -->
+
+### K53. Koreksi dari penerjemahan ERD ke skema Prisma (Tahap 1)
+
+Dicatat saat menulis apps/backend/prisma/schema.prisma (T1.1, issue 51). Bagian 6 dan K1 sampai K52 dibaca bersama koreksi ini, dan K53 menang bila berbeda. Butir 1 sampai 4, 8, dan 9 sebagian diuji dengan pengurai skema Prisma 7.10.0. Butir yang menyangkut perilaku SQL Server belum diuji terhadap SQL Server dan ditandai.
+
+1. Tipe Json tidak didukung untuk SQL Server (galat P1012). Kolom yang di bagian 6 bertanda JSON disimpan sebagai teks NVarChar(Max) dengan CHECK ISJSON(kolom) = 1 di SQL mentah: Notification.payload, AuditLog.oldValue dan newValue, ReceiptExtraction.rawJson, dan IdempotencyKey.responseBody. Berlaku juga untuk tabel Tahap 2 dan 3 yang kelak punya kolom JSON, misalnya TransactionRevision.payload.
+2. Relasi tanpa onUpdate eksplisit memakai Cascade bawaan. SQL Server melarang trigger INSTEAD OF UPDATE atau DELETE pada tabel yang punya kunci asing berantai (setahu saya, belum diuji terhadap SQL Server). Karena itu semua relasi memakai onDelete NoAction dan onUpdate NoAction. Prisma juga mewajibkannya untuk relasi ke diri sendiri.
+3. PaymentConfirmation: ditambah methodId (FK PaymentMethod, opsional), methodProvider, methodAccountName (salinan saat pelunasan dibuat), note, dan rejectReason. Salinan diperlukan karena PATCH /me/payment-methods mengubah isi metode, dan tanpa salinan catatan pelunasan lama ikut berubah.
+4. IdempotencyKey: ditambah requestHash (SHA-256 isi permintaan, untuk idempotency-key-reuse), state (IN_PROGRESS atau COMPLETED, untuk request-in-progress), dan completedAt.
+5. LedgerEntry.idempotencyKey (tabel di 6.2) dibuang: redundan dengan IdempotencyKey yang unik pada (userId, key) dan penulisan atomik dalam satu transaksi database. Kalimat di 6.6 yang menyebut kolom itu tidak berlaku.
+6. ReceiptExtraction bersifat append-only, tetapi kontrak 9.2 mengizinkan menghapus transaksi DRAFT, padahal struk diverifikasi saat DRAFT. Trigger menolak UPDATE seluruhnya, dan menolak DELETE kecuali transaksi induknya berstatus DRAFT. Menghapus DRAFT menghapus ReceiptItem, ReceiptExtraction, dan TransactionShare lebih dulu, lalu Transaction, dalam satu transaksi database.
+7. LedgerEntry: debtorUserId dan creditorUserId nullable sejak Tahap 1 (bentuk akhir sesuai K1). CHECK Tahap 1 mewajibkan keduanya terisi dan tidak sama. Tahap 3 menambah debtorFundId dan creditorFundId, dan mengganti CHECK.
+8. Penamaan dan tipe: kolom model pada ReceiptExtraction menjadi aiModel (model adalah kata kunci Prisma). Semua id bertipe Int, dan hanya nominal LedgerEntry (kelak juga FundEntry) bertipe BigInt (K7).
+9. Dua aturan tidak dapat dinyatakan di Prisma dan menjadi indeks unik terfilter di SQL mentah: satu OWNER aktif per grup (GroupMember, role OWNER dan status ACTIVE), dan satu pembalikan per entri (LedgerEntry.reversesEntryId tidak null). SQL Server memperlakukan NULL sebagai satu nilai pada indeks unik biasa, jadi @unique pada kolom nullable bukan pilihan.
+
+Dua risiko yang belum terbukti, keduanya menjadi kriteria uji:
+- Prisma Migrate dapat menganggap indeks terfilter itu tidak dikenal dan membuangnya pada migration berikutnya. Kriteria T1.1: setelah baseline, prisma migrate dev harus melaporkan sinkron. T1.2 memeriksa keberadaan kedua indeks lewat sys.indexes.
+- Indeks terfilter mensyaratkan opsi SET tertentu (misalnya ARITHABORT) aktif pada koneksi yang menulis, dan pengaturan bawaan driver dapat berbeda. T1.2 mengujinya lewat penulisan nyata ke GroupMember dan LedgerEntry.
+
+<!-- akhir-bagian-10j -->
