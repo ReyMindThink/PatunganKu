@@ -7,87 +7,321 @@ datasource db {
   provider = "sqlserver"
 }
 
-model User {
-  id           Int      @id @default(autoincrement())
-  email        String   @unique @db.NVarChar(255)
-  passwordHash String
-  name         String
-  phone        String?
-  createdAt    DateTime @default(now())
+// Skema v2 subset Tahap 1. Rancangan: docs/architecture.md bagian 6.
+// Aturan: semua relasi memakai NoAction (Konvensi bagian 6), kolom status berupa String
+// yang dijaga CHECK di migration SQL mentah, dan kolom berisi JSON disimpan sebagai teks
+// karena SQL Server tidak mendukung tipe Json di Prisma.
 
-  memberships   GroupMember[]
-  groupsCreated Group[]               @relation("GroupCreator")
-  paidTx        Transaction[]         @relation("TxPayer")
-  splits        TransactionSplit[]
-  paymentsSent  PaymentConfirmation[] @relation("PaymentSender")
-  paymentsRecv  PaymentConfirmation[] @relation("PaymentReceiver")
+model User {
+  id            Int      @id @default(autoincrement())
+  email         String   @unique @db.NVarChar(254)
+  passwordHash  String   @db.NVarChar(255)
+  name          String   @db.NVarChar(100)
+  notifyByEmail Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  groupsCreated      Group[]               @relation("GroupCreator")
+  memberships        GroupMember[]
+  transactionsPaid   Transaction[]         @relation("TransactionPayer")
+  shares             TransactionShare[]
+  paymentsSent       PaymentConfirmation[] @relation("PaymentSender")
+  paymentsReceived   PaymentConfirmation[] @relation("PaymentReceiver")
+  ledgerAsDebtor     LedgerEntry[]         @relation("LedgerDebtor")
+  ledgerAsCreditor   LedgerEntry[]         @relation("LedgerCreditor")
+  ledgerCreated      LedgerEntry[]         @relation("LedgerCreator")
+  auditActions       AuditLog[]
+  extractionsCreated ReceiptExtraction[]
+  approvalsRequested Approval[]
+  approvalVotes      ApprovalVote[]
+  notifications      Notification[]
+  paymentMethods     PaymentMethod[]
+  idempotencyKeys    IdempotencyKey[]
 }
 
 model Group {
   id        Int      @id @default(autoincrement())
-  name      String
-  code      String   @unique @db.NVarChar(20)
+  name      String   @db.NVarChar(100)
+  code      String   @unique @db.NVarChar(10)
   createdBy Int
   createdAt DateTime @default(now())
 
-  creator      User                  @relation("GroupCreator", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  members      GroupMember[]
-  transactions Transaction[]
-  payments     PaymentConfirmation[]
+  creator       User                  @relation("GroupCreator", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  members       GroupMember[]
+  transactions  Transaction[]
+  payments      PaymentConfirmation[]
+  ledgerEntries LedgerEntry[]
+  auditLogs     AuditLog[]
+  approvals     Approval[]
+  notifications Notification[]
 }
 
 model GroupMember {
-  id       Int      @id @default(autoincrement())
-  groupId  Int
-  userId   Int
-  role     String   @default("MEMBER") @db.NVarChar(20)
-  joinedAt DateTime @default(now())
+  id         Int       @id @default(autoincrement())
+  groupId    Int
+  userId     Int
+  role       String    @default("MEMBER") @db.NVarChar(10)
+  status     String    @default("ACTIVE") @db.NVarChar(10)
+  joinedAt   DateTime  @default(now())
+  leftAt     DateTime?
+  leftReason String?   @db.NVarChar(500)
 
-  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  group Group @relation(fields: [groupId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   user  User  @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([groupId, userId])
+  @@index([userId])
 }
 
 model Transaction {
-  id            Int      @id @default(autoincrement())
+  id            Int       @id @default(autoincrement())
   groupId       Int
   payerId       Int
-  description   String
+  description   String    @db.NVarChar(500)
   amount        Int
-  receiptUrl    String?
-  receiptStatus String   @default("PENDING") @db.NVarChar(20)
-  createdAt     DateTime @default(now())
+  mode          String    @default("EQUAL_ALL") @db.NVarChar(15)
+  status        String    @default("DRAFT") @db.NVarChar(20)
+  receiptUrl    String?   @db.NVarChar(500)
+  receiptStatus String    @default("PENDING") @db.NVarChar(15)
+  imageSha256   String?   @db.Char(64)
+  fingerprint   String?   @db.Char(64)
+  version       Int       @default(1)
+  expiresAt     DateTime?
+  createdAt     DateTime  @default(now())
 
-  group  Group              @relation(fields: [groupId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  payer  User               @relation("TxPayer", fields: [payerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  splits TransactionSplit[]
+  group         Group               @relation(fields: [groupId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  payer         User                @relation("TransactionPayer", fields: [payerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  shares        TransactionShare[]
+  ledgerEntries LedgerEntry[]
+  extractions   ReceiptExtraction[]
+  auditLogs     AuditLog[]
+
+  @@index([groupId, createdAt])
+  @@index([groupId, imageSha256])
+  @@index([groupId, fingerprint])
+  @@index([payerId])
 }
 
-model TransactionSplit {
-  id            Int @id @default(autoincrement())
+model TransactionShare {
+  id            Int       @id @default(autoincrement())
   transactionId Int
   userId        Int
   amount        Int
+  consent       String    @default("PENDING") @db.NVarChar(10)
+  consentAt     DateTime?
 
-  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   user        User        @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([transactionId, userId])
+  @@index([userId])
 }
 
 model PaymentConfirmation {
-  id         Int       @id @default(autoincrement())
-  groupId    Int
-  senderId   Int
-  receiverId Int
-  amount     Int
-  proofUrl   String?
-  status     String    @default("PENDING") @db.NVarChar(20)
-  createdAt  DateTime  @default(now())
-  decidedAt  DateTime?
+  id                Int       @id @default(autoincrement())
+  groupId           Int
+  senderId          Int
+  receiverId        Int
+  amount            Int
+  methodType        String    @db.NVarChar(10)
+  methodId          Int?
+  methodProvider    String?   @db.NVarChar(50)
+  methodAccountName String?   @db.NVarChar(100)
+  note              String?   @db.NVarChar(500)
+  proofUrl          String?   @db.NVarChar(500)
+  status            String    @default("PENDING") @db.NVarChar(10)
+  rejectReason      String?   @db.NVarChar(500)
+  createdAt         DateTime  @default(now())
+  decidedAt         DateTime?
+  cancelledAt       DateTime?
 
-  group    Group @relation(fields: [groupId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  sender   User  @relation("PaymentSender", fields: [senderId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  receiver User  @relation("PaymentReceiver", fields: [receiverId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  group         Group          @relation(fields: [groupId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sender        User           @relation("PaymentSender", fields: [senderId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  receiver      User           @relation("PaymentReceiver", fields: [receiverId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  method        PaymentMethod? @relation(fields: [methodId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  ledgerEntries LedgerEntry[]
+
+  @@index([groupId, senderId, receiverId])
+  @@index([receiverId, status])
+}
+
+model LedgerEntry {
+  id              Int      @id @default(autoincrement())
+  groupId         Int
+  type            String   @db.NVarChar(10)
+  sign            Int
+  amount          BigInt
+  debtorUserId    Int?
+  creditorUserId  Int?
+  category        String?  @db.NVarChar(10)
+  transactionId   Int?
+  paymentId       Int?
+  reversesEntryId Int?
+  createdBy       Int?
+  createdAt       DateTime @default(now())
+
+  group       Group                @relation(fields: [groupId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  debtor      User?                @relation("LedgerDebtor", fields: [debtorUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creditor    User?                @relation("LedgerCreditor", fields: [creditorUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator     User?                @relation("LedgerCreator", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  transaction Transaction?         @relation(fields: [transactionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  payment     PaymentConfirmation? @relation(fields: [paymentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  reverses    LedgerEntry?         @relation("LedgerReversal", fields: [reversesEntryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  reversedBy  LedgerEntry[]        @relation("LedgerReversal")
+
+  @@index([groupId, debtorUserId, creditorUserId])
+  @@index([transactionId])
+  @@index([paymentId])
+}
+
+model AuditLog {
+  id            Int      @id @default(autoincrement())
+  groupId       Int?
+  actorId       Int?
+  transactionId Int?
+  entity        String   @db.NVarChar(40)
+  entityId      Int?
+  action        String   @db.NVarChar(40)
+  oldValue      String?  @db.NVarChar(Max)
+  newValue      String?  @db.NVarChar(Max)
+  reason        String?  @db.NVarChar(500)
+  createdAt     DateTime @default(now())
+
+  group       Group?       @relation(fields: [groupId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  actor       User?        @relation(fields: [actorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  transaction Transaction? @relation(fields: [transactionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([groupId, createdAt])
+  @@index([transactionId])
+  @@index([actorId])
+}
+
+model ReceiptExtraction {
+  id            Int       @id @default(autoincrement())
+  transactionId Int
+  version       Int
+  source        String    @db.NVarChar(5)
+  createdBy     Int?
+  merchant      String?   @db.NVarChar(200)
+  purchasedAt   DateTime?
+  subtotal      Int?
+  discount      Int?
+  service       Int?
+  shipping      Int?
+  tax           Int?
+  taxMode       String?   @db.NVarChar(10)
+  total         Int?
+  confidence    Float?
+  arithmeticOk  Boolean?
+  rawJson       String?   @db.NVarChar(Max)
+  aiModel       String?   @db.NVarChar(60)
+  promptVersion String?   @db.NVarChar(30)
+  createdAt     DateTime  @default(now())
+
+  transaction Transaction   @relation(fields: [transactionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator     User?         @relation(fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  items       ReceiptItem[]
+
+  @@unique([transactionId, version])
+}
+
+model ReceiptItem {
+  id           Int    @id @default(autoincrement())
+  extractionId Int
+  name         String @db.NVarChar(200)
+  qty          Int
+  unitPrice    Int
+  subtotal     Int
+
+  extraction ReceiptExtraction @relation(fields: [extractionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([extractionId])
+}
+
+model Approval {
+  id            Int       @id @default(autoincrement())
+  groupId       Int
+  subjectType   String    @db.NVarChar(15)
+  subjectId     Int
+  rule          String    @db.NVarChar(20)
+  requestedBy   Int
+  eligibleCount Int
+  required      Int
+  status        String    @default("OPEN") @db.NVarChar(10)
+  expiresAt     DateTime
+  decidedAt     DateTime?
+  createdAt     DateTime  @default(now())
+
+  group     Group          @relation(fields: [groupId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  requester User           @relation(fields: [requestedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  votes     ApprovalVote[]
+
+  @@index([groupId, status])
+  @@index([subjectType, subjectId])
+  @@index([status, expiresAt])
+}
+
+model ApprovalVote {
+  id         Int      @id @default(autoincrement())
+  approvalId Int
+  userId     Int
+  vote       String   @db.NVarChar(10)
+  votedAt    DateTime @default(now())
+
+  approval Approval @relation(fields: [approvalId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user     User     @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([approvalId, userId])
+  @@index([userId])
+}
+
+model Notification {
+  id        Int       @id @default(autoincrement())
+  userId    Int
+  groupId   Int?
+  type      String    @db.NVarChar(40)
+  payload   String    @default("{}") @db.NVarChar(Max)
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  group Group? @relation(fields: [groupId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
+}
+
+model PaymentMethod {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  kind        String   @db.NVarChar(10)
+  provider    String?  @db.NVarChar(50)
+  /// Nomor rekening dienkripsi di lapisan aplikasi. Tidak pernah masuk log atau konteks chatbot.
+  accountNo   String?  @db.NVarChar(500)
+  accountName String?  @db.NVarChar(100)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  user     User                  @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  payments PaymentConfirmation[]
+
+  @@index([userId, isActive])
+}
+
+model IdempotencyKey {
+  id           Int       @id @default(autoincrement())
+  userId       Int
+  key          String    @db.NVarChar(64)
+  method       String    @db.NVarChar(8)
+  path         String    @db.NVarChar(300)
+  requestHash  String    @db.Char(64)
+  state        String    @default("IN_PROGRESS") @db.NVarChar(12)
+  statusCode   Int?
+  responseBody String?   @db.NVarChar(Max)
+  createdAt    DateTime  @default(now())
+  completedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([userId, key])
+  @@index([createdAt])
 }
