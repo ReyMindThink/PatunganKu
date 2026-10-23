@@ -400,3 +400,37 @@ Tidak ada issue lama yang ditutup. Penutupan hanya dengan bukti tes.
 | #15 dan #18 (tertutup) | Rasyid | #42 | Tindak lanjut tercakup di Tahap 1: saldo dari ledger, dan CHARGE hanya setelah transaksi lolos |
 
 <!-- akhir-roadmap-daftar -->
+
+## 15. Strategi pengembangan Tahap 1 dan database lokal
+
+Keputusan 11 Oktober 2026.
+
+### 15.1 Strategi merge
+
+1. Backend v2 dikembangkan di branch 545518 dan digabung ke main hanya setelah acceptance criteria Tahap 1 (issue 42) terpenuhi. Sampai saat itu main berisi backend v1 yang berfungsi.
+2. Titik kembali: tag backend-v1 menunjuk ke commit 8afe815 (merge PR 50), yaitu backend v1 beserta dokumen rancangan. Tag ini ringan (tanpa anotasi) karena tag beranotasi membawa identitas pembuat dan ditolak GitHub (GH007). Bila Tahap 1 tidak selesai, yang diserahkan adalah backend v1.
+3. CI hanya berjalan pada push ke main dan dev serta pull request ke main dan dev. Selama Tahap 1 dipakai draft PR dari 545518 ke main supaya CI berjalan pada setiap push.
+4. Alasan: kontrak API berubah total (pembungkus data, format error, bentuk auth, id), dan menukar skema membuat endpoint v1 berhenti berfungsi sampai ditulis ulang. Tes yang ada hanya menguji fungsi murni, jadi CI tetap hijau walau endpoint rusak. Menggabungkan perubahan skema ke main tanpa menulis ulang endpoint akan menghasilkan hijau palsu.
+5. Harga yang dibayar: kemajuan Tahap 1 tidak terlihat di main sampai selesai, dan pekerjaan Tahap 1 yang belum selesai tidak ikut diserahkan bila waktu habis.
+6. Perubahan dokumen yang berdiri sendiri dibuat dari branch pendek yang dipecah dari main, bukan dari 545518, supaya tidak membawa kode Tahap 1 yang belum selesai.
+
+### 15.2 Database lokal
+
+1. Pengembangan v2 memakai database patunganku_v2 pada kontainer yang sama. Database patunganku (data uji dan bahan bukti v1) tidak disentuh.
+2. Larangan: docker compose down -v, prisma migrate reset --force terhadap patunganku, dan mengubah .env ke patunganku_v2 sebelum migration v2 siap.
+3. Menjalankan v1 untuk bukti laporan: checkout tag backend-v1 dan atur DB_NAME serta database pada DATABASE_URL ke patunganku.
+4. Database patunganku baru dihapus setelah laporan selesai dan atas keputusan eksplisit.
+
+### 15.3 Koordinasi frontend
+
+1. Aqidatul menyebut sedang mencoba mengintegrasikan frontend ke backend (percakapan 9 Oktober 2026). Seberapa jauh integrasinya belum diverifikasi.
+2. Selama Tahap 1, main tetap v1 yang stabil. Bentuk respons v1 berubah di v2 (api-contract bagian 4 dan 5).
+3. Seluruh pemanggilan API frontend sebaiknya berada di satu modul klien (F1.1) agar peralihan ke v2 hanya mengubah satu tempat.
+
+### 15.4 Identitas Git dan privasi email
+
+1. GitHub dapat memblokir push yang mengekspos email privat (galat GH007). Atur git config user.email ke alamat noreply akun GitHub masing-masing (Settings, Emails), hanya untuk repo ini bila ada proyek lain di mesin yang sama.
+2. Tag beranotasi membawa identitas pembuat dan ikut ditolak. Gunakan tag ringan, yaitu git tag nama commit.
+3. Riwayat yang sudah ada tidak ditulis ulang, karena riwayat main dipakai bersama dan salinannya sudah tersebar. Commit lama memuat email yang dipakai saat dibuat, dan itu dapat dilihat di repositori publik. Pemilik email masing-masing dapat meninjau keputusan ini.
+
+<!-- akhir-roadmap-strategi -->
