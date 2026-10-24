@@ -2,7 +2,7 @@
 
 Dokumen ini adalah sumber kebenaran desain backend. Setiap perubahan skema, state machine, atau aturan bisnis diperbarui di sini lebih dulu, baru ke kode.
 
-Status: Tahap 0 (rancangan). Migration belum ditulis. Versi dokumen: 2.
+Status: Tahap 1 berjalan. Migration baseline (T1.1) sudah ditulis dan diuji, lihat K54. Versi dokumen: 2.
 
 ## 1. Tujuan dan ruang lingkup
 
@@ -1073,5 +1073,16 @@ Dicatat saat menulis apps/backend/prisma/schema.prisma (T1.1, issue 51). Bagian 
 Dua risiko yang belum terbukti, keduanya menjadi kriteria uji:
 - Prisma Migrate dapat menganggap indeks terfilter itu tidak dikenal dan membuangnya pada migration berikutnya. Kriteria T1.1: setelah baseline, prisma migrate dev harus melaporkan sinkron. T1.2 memeriksa keberadaan kedua indeks lewat sys.indexes.
 - Indeks terfilter mensyaratkan opsi SET tertentu (misalnya ARITHABORT) aktif pada koneksi yang menulis, dan pengaturan bawaan driver dapat berbeda. T1.2 mengujinya lewat penulisan nyata ke GroupMember dan LedgerEntry.
+
+### K54. Hasil uji baseline T1.1 dan pengetatan CHECK (Tahap 1)
+
+Dicatat setelah migration 20261013221100_v2_tahap1 diterapkan ke SQL Server 2022 dan diuji dengan infra/smoke-v2.sql. K54 menang bila berbeda dengan K53 dan bagian 6. Berbeda dari K53, butir di bawah sudah dijalankan terhadap SQL Server.
+
+1. Empat CHECK yang lebih ketat dari ERD diterima: (a) LedgerEntry bertipe REVERSAL selalu bertanda minus dan wajib punya reversesEntryId (CK_LedgerEntry_shape); (b) PaymentConfirmation non-tunai wajib punya proofUrl dan methodId (CK_PaymentConfirmation_proof); (c) PaymentConfirmation.amount harus lebih dari 0 (CK_PaymentConfirmation_amount); (d) Approval memenuhi 1 <= required <= eligibleCount (CK_Approval_counts). Butir (a) hanya separuh ditegakkan database. Aturan bahwa REVERSAL hanya membalik CHARGE tidak dapat dinyatakan sebagai CHECK karena CHECK hanya melihat satu baris, dan tidak ada trigger untuk itu. Uji G1 membuktikan database menerima REVERSAL yang menunjuk baris SETTLEMENT. Modul ledger (T1.6) wajib memeriksa bahwa baris yang dibalik bertipe CHARGE dan memiliki tes untuk itu. Satu REVERSAL per baris dijaga indeks UX_LedgerEntry_Reverses. Butir (b) baru diuji pada kasus tanpa bukti dan tanpa metode sekaligus, belum pada kasus ada bukti tanpa metode.
+2. Kode galat trigger append-only yang sudah diuji: 51001 (UPDATE dan DELETE LedgerEntry), 51002 (UPDATE AuditLog), 51003 (UPDATE ReceiptExtraction), 51004 (DELETE ReceiptExtraction saat transaksi induk bukan DRAFT). DELETE AuditLog belum diuji.
+3. Hasil: baseline dibangun dari database kosong dengan prisma migrate deploy dan menghasilkan 16 tabel, 3 trigger, 37 CHECK, 2 indeks terfilter, 32 kunci asing, dan 0 kunci asing berantai, sama dengan database yang dibuat lewat migrate dev. Uji asap pada kedua database: 18 penolakan sesuai harapan, 8 penerimaan sesuai harapan, 1 celah (butir 1), 0 masalah. Uji berjalan lewat sqlcmd dengan opsi SET yang diatur eksplisit (ARITHABORT ON dan lainnya), jadi tidak membuktikan perilaku koneksi dari driver Node.
+4. Status dua risiko K53. Indeks terfilter dibuang Prisma Migrate: prisma migrate diff dari database ke skema tidak melaporkan perbedaan dan migrate status melaporkan sinkron. Itu belum membuktikan perilaku saat membuat migration kedua dengan migrate dev (database bayangan). Tetap kriteria T1.2 (sys.indexes), dan setiap migration baru dibaca manual: tidak boleh memuat DROP INDEX untuk UX_GroupMember_OneActiveOwner dan UX_LedgerEntry_Reverses. Opsi SET koneksi driver Node: belum teruji, tetap kriteria T1.2.
+5. Penulisan lewat Prisma Client ke LedgerEntry, AuditLog, dan ReceiptExtraction (tabel bertrigger) belum diuji. T1.2 menambah uji itu.
+6. Branch 545518 memakai database patunganku_v2. Database patunganku (v1) dipertahankan sebagai bahan bukti laporan dan tidak dipakai. apps/backend/.env.example menunjuk patunganku_v2, sedangkan backend v1 di main membutuhkan patunganku.
 
 <!-- akhir-bagian-10j -->

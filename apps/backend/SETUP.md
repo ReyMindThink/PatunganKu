@@ -44,15 +44,36 @@ docker compose up -d --wait
 
 Perintah ini baru selesai setelah SQL Server dan Azurite berstatus `healthy`.
 
-## 4. Jalankan migration
+## 4. Buat database dan jalankan migration
+
+Backend v2 memakai database `patunganku_v2`. Database `patunganku` milik backend v1
+tidak dipakai dan jangan disentuh (isinya bahan bukti laporan).
+
+Pastikan `DB_NAME=patunganku_v2` dan `database=patunganku_v2` pada `DATABASE_URL`
+di `.env` (`.env.example` sudah begitu). Buat database kosong lebih dulu. Di Git Bash
+awali dengan `MSYS_NO_PATHCONV=1`. Password dibaca di dalam container, jadi tidak
+perlu diketik:
+
+```bash
+MSYS_NO_PATHCONV=1 docker exec patunganku-sqlserver bash -c '/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -Q "CREATE DATABASE patunganku_v2"'
+```
+
+Jika database itu sudah ada, perintah menjawab bahwa database sudah ada dan langkah
+ini boleh dilewati. Lalu terapkan migration. Migration pertama membangun seluruh
+skema: 16 tabel, trigger append-only, CHECK, dan dua indeks unik terfilter.
 
 ```bash
 cd ../apps/backend
-npx prisma migrate dev
+npx prisma migrate deploy
 ```
 
-Migration yang sudah ada di `prisma/migrations/` akan diterapkan ke database
-lokal kamu.
+Hasil yang diharapkan: `All migrations have been successfully applied`. Langkah ini
+sudah diuji pada database kosong (lihat K54 di `docs/architecture.md`).
+
+Saat mengubah `schema.prisma`, buat migration baru dengan
+`npx prisma migrate dev --create-only --name nama_perubahan`, lalu baca SQL-nya
+sebelum diterapkan. Migration baru tidak boleh memuat `DROP INDEX` untuk
+`UX_GroupMember_OneActiveOwner` atau `UX_LedgerEntry_Reverses`.
 
 Prisma Client **tidak** otomatis ter-generate setelah `migrate dev`. `npm install`
 sudah menjalankannya lewat skrip `postinstall`, tapi setiap kali `schema.prisma`
@@ -94,16 +115,18 @@ Kalau password diganti, ubah di kedua tempat dan di `infra/docker-compose.yml`.
 **`Login failed for user 'sa'`**
 Password di `.env` tidak sama dengan password yang dipakai container, atau
 nilainya terpotong karena `#` tanpa tanda kutip. Periksa kutipnya dulu. Jika
-container lama memakai password berbeda, reset (hanya menghapus data
-development):
+container lama memakai password berbeda, volume harus dibuat ulang.
+**Peringatan:** `docker compose down -v` menghapus volume SQL Server **dan**
+Azurite, jadi seluruh data development, termasuk foto struk uji, ikut hilang.
+Cadangkan dulu bila datanya masih diperlukan.
 
 ```bash
 cd infra
 docker compose down -v
 docker compose up -d --wait
-cd ../apps/backend
-npx prisma migrate dev
 ```
+
+Setelah itu ulangi langkah 4 (database `patunganku_v2` harus dibuat lagi).
 
 **`P1017: Server has closed the connection` / `read ECONNRESET`**
 SQL Server belum siap menerima koneksi. Pastikan status `healthy`
@@ -123,7 +146,11 @@ Prisma Client belum di-generate ulang setelah schema berubah, sehingga model
 server restart otomatis.
 
 **`The API version ... is not supported by Azurite`**
-Container Azurite lama belum memakai flag `--skipApiVersionCheck`. Setelah `git pull`, buat ulang containernya (data tidak hilang):
+Container Azurite lama belum memakai flag `--skipApiVersionCheck`. Setelah `git pull`, buat ulang containernya.
+Container yang dibuat sebelum flag `--location /data` ditambahkan menyimpan data di
+lapisan container, bukan di volume, sehingga data (foto struk uji) hilang saat dibuat
+ulang. Salin dulu bila diperlukan (`docker cp patunganku-azurite:/opt/azurite <folder>`).
+Container yang dibuat dari compose terbaru menyimpan data di volume dan tahan dibuat ulang:
 
 ```bash
 cd infra

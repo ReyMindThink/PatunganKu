@@ -19,10 +19,10 @@ services:
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:latest
     container_name: patunganku-azurite
-    command: "azurite --skipApiVersionCheck --blobHost 0.0.0.0 --blobPort 10000 --queueHost 0.0.0.0 --queuePort 10001"
+    command: "azurite --skipApiVersionCheck --blobHost 0.0.0.0 --blobPort 10000 --queueHost 0.0.0.0 --queuePort 10001 --location /data"
     ports:
-      - "10000:10000"
-      - "10001:10001"
+      - "127.0.0.1:10000:10000"
+      - "127.0.0.1:10001:10001"
     volumes:
       - azurite-data:/data
 
