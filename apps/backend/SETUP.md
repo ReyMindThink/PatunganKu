@@ -99,6 +99,39 @@ curl http://localhost:4000/api/health
 
 Hasil yang diharapkan: `{"status":"ok","timestamp":"..."}`.
 
+## 6. Jalankan tes
+
+Tes unit tidak membutuhkan database, dan `npm run check` hanya memeriksa sintaks
+(bukan lint):
+
+```bash
+cd apps/backend
+npm test
+npm run check
+```
+
+Tes integrasi memakai SQL Server nyata dan menulis data permanen (tabel tambah-saja
+tidak dapat dibersihkan), jadi harus memakai database terpisah yang namanya berakhiran
+`_test`. Tes menolak berjalan pada nama lain, termasuk `patunganku_v2`. Buat database
+itu sekali saja (dari akar repo):
+
+```bash
+MSYS_NO_PATHCONV=1 docker exec patunganku-sqlserver bash -c '/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -Q "CREATE DATABASE patunganku_test"'
+```
+
+Terapkan migration ke database itu dengan mengganti nama database pada `DATABASE_URL`
+hanya untuk perintah ini (`.env` tidak berubah), lalu jalankan tes:
+
+```bash
+cd apps/backend
+DATABASE_URL="$(grep '^DATABASE_URL=' .env | cut -d= -f2- | tr -d '"' | sed 's/database=patunganku_v2;/database=patunganku_test;/')" npx prisma migrate deploy
+DB_NAME=patunganku_test npm run test:integration
+```
+
+Setiap ada migration baru, ulangi `migrate deploy` itu. Jika tes gagal dengan pesan
+bahwa suatu kolom tidak ada, Prisma Client lokal masih hasil skema lama: jalankan
+`npx prisma generate`. Di CI semua ini berjalan otomatis pada container SQL Server baru.
+
 ## Konfigurasi database
 
 `.env` sengaja berisi dua representasi koneksi karena Prisma 7 memisahkannya:
