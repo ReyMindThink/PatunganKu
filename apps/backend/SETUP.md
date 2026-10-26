@@ -32,13 +32,14 @@ Password database mengandung karakter `#`, jadi nilainya wajib diberi tanda
 kutip. Tanpa kutip, `#` dibaca sebagai awal komentar dan password terpotong:
 
 ```env
-DB_PASSWORD="PatunganKu#2026"
+DB_PASSWORD="GANTI_DENGAN_KATA_SANDI_KUAT"
 ```
 
 ## 3. Nyalakan database lokal (Docker)
 
 ```bash
 cd ../../infra
+cp .env.example .env   # sekali saja, lalu isi kata sandi kuat di infra/.env
 docker compose up -d --wait
 ```
 
@@ -141,7 +142,7 @@ bahwa suatu kolom tidak ada, Prisma Client lokal masih hasil skema lama: jalanka
 | `DATABASE_URL`                                              | Prisma CLI (`migrate`, `generate`) lewat `prisma.config.ts`               |
 | `DB_SERVER`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` | Aplikasi saat runtime (`src/lib/prisma.js`) lewat `@prisma/adapter-mssql` |
 
-Kalau password diganti, ubah di kedua tempat dan di `infra/docker-compose.yml`.
+Kalau password diganti, ubah di kedua tempat dan di `infra/.env` (bukan di compose), jalankan `ALTER LOGIN sa` di server yang sudah berisi data, lalu buat ulang kontainernya dengan `docker compose up -d --force-recreate sqlserver`.
 
 ## Masalah umum
 
