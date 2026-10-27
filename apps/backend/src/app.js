@@ -7,7 +7,7 @@ import transactionRoutes from "./routes/transaction.routes.js";
 import ledgerRoutes from "./routes/ledger.routes.js";
 import paymentRoutes from "./routes/payment.routes.js";
 import receiptRoutes from "./routes/receipt.routes.js";
-import { errorHandler } from "./middlewares/errorHandler.js";
+import { errorHandler, rutTidakDitemukan } from "./middlewares/errorHandler.js";
 
 const app = express();
 
@@ -25,9 +25,7 @@ app.use("/api/groups/:groupId/transactions", receiptRoutes);
 app.use("/api/groups/:groupId/balances", ledgerRoutes);
 app.use("/api/groups/:groupId/payments", paymentRoutes);
 
-app.use((req, res) => {
-  res.status(404).json({ error: "route-not-found" });
-});
+app.use(rutTidakDitemukan);
 
 app.use(errorHandler);
 
