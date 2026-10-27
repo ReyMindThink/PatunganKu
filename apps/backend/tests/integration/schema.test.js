@@ -10,7 +10,7 @@ after(async () => {
 });
 
 const TABEL = [
-  "User", "Group", "GroupMember", "Transaction", "TransactionShare",
+  "UserX", "Group", "GroupMember", "Transaction", "TransactionShare",
   "PaymentConfirmation", "LedgerEntry", "AuditLog", "ReceiptExtraction", "ReceiptItem",
   "Approval", "ApprovalVote", "Notification", "PaymentMethod", "IdempotencyKey",
 ];
