@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import { env } from "./config/env.js";
-import authRoutes from "./routes/auth.routes.js";
+import { authRouter, meRouter } from "./routes/akun.routes.js";
 import groupRoutes from "./routes/group.routes.js";
 import transactionRoutes from "./routes/transaction.routes.js";
 import ledgerRoutes from "./routes/ledger.routes.js";
@@ -18,7 +18,8 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-app.use("/api/auth", authRoutes);
+app.use("/api/auth", authRouter);
+app.use("/api/me", meRouter);
 app.use("/api/groups", groupRoutes);
 app.use("/api/groups/:groupId/transactions", transactionRoutes);
 app.use("/api/groups/:groupId/transactions", receiptRoutes);
