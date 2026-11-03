@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import { env } from "./config/env.js";
 import { authRouter, meRouter } from "./routes/akun.routes.js";
-import groupRoutes from "./routes/group.routes.js";
+import groupRoutes from "./routes/grup.routes.js";
 import transactionRoutes from "./routes/transaction.routes.js";
 import ledgerRoutes from "./routes/ledger.routes.js";
 import paymentRoutes from "./routes/payment.routes.js";
