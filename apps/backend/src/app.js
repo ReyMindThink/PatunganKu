@@ -3,7 +3,7 @@ import cors from "cors";
 import { env } from "./config/env.js";
 import { authRouter, meRouter } from "./routes/akun.routes.js";
 import groupRoutes from "./routes/grup.routes.js";
-import transactionRoutes from "./routes/transaction.routes.js";
+import transaksiRoutes from "./routes/transaksi.routes.js";
 import ledgerRoutes from "./routes/ledger.routes.js";
 import paymentRoutes from "./routes/payment.routes.js";
 import receiptRoutes from "./routes/receipt.routes.js";
@@ -21,7 +21,7 @@ app.get("/api/health", (req, res) => {
 app.use("/api/auth", authRouter);
 app.use("/api/me", meRouter);
 app.use("/api/groups", groupRoutes);
-app.use("/api/groups/:groupId/transactions", transactionRoutes);
+app.use("/api/groups", transaksiRoutes);
 app.use("/api/groups/:groupId/transactions", receiptRoutes);
 app.use("/api/groups/:groupId/balances", ledgerRoutes);
 app.use("/api/groups/:groupId/payments", paymentRoutes);
