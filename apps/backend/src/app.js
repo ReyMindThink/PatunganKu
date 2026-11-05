@@ -6,7 +6,7 @@ import groupRoutes from "./routes/grup.routes.js";
 import transaksiRoutes from "./routes/transaksi.routes.js";
 import ledgerRoutes from "./routes/ledger.routes.js";
 import paymentRoutes from "./routes/payment.routes.js";
-import receiptRoutes from "./routes/receipt.routes.js";
+import strukRoutes from "./routes/struk.routes.js";
 import { errorHandler, rutTidakDitemukan } from "./middlewares/errorHandler.js";
 
 const app = express();
@@ -22,7 +22,7 @@ app.use("/api/auth", authRouter);
 app.use("/api/me", meRouter);
 app.use("/api/groups", groupRoutes);
 app.use("/api/groups", transaksiRoutes);
-app.use("/api/groups/:groupId/transactions", receiptRoutes);
+app.use("/api/groups", strukRoutes);
 app.use("/api/groups/:groupId/balances", ledgerRoutes);
 app.use("/api/groups/:groupId/payments", paymentRoutes);
 

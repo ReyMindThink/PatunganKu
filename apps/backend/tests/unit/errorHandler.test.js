@@ -29,6 +29,12 @@ beforeEach(async () => {
     a.get("/async-meledak", async () => {
       throw new Error("rahasia-db-xyz");
     });
+    a.get("/duplikat", () => {
+      throw new HttpError(409, "duplicate-receipt", "Struk sudah dipakai.", undefined, { existingTransactionId: 42 });
+    });
+    a.get("/extra-menimpa", () => {
+      throw new HttpError(409, "duplicate-receipt", "Struk sudah dipakai.", undefined, { existingTransactionId: 42, status: 200, code: "palsu", detail: "palsu", type: "palsu" });
+    });
     a.get("/multer-besar", () => {
       throw new multer.MulterError("LIMIT_FILE_SIZE", "receipt");
     });
@@ -124,6 +130,17 @@ describe("isi galat", () => {
     assert.deepEqual(v.errors, [{ field: "amount", message: "Harus bilangan bulat positif" }]);
     const f = await (await fetch(app.url + "/forbidden")).json();
     assert.equal("errors" in f, false);
+  });
+
+  it("HttpError dengan extra menambah field ke badan problem+json; field baku tidak dapat ditimpa", async () => {
+    const b = await (await fetch(app.url + "/duplikat")).json();
+    assert.equal(b.existingTransactionId, 42);
+    assert.equal(b.code, "duplicate-receipt");
+    assert.equal("errors" in b, false);
+    const res = await fetch(app.url + "/extra-menimpa");
+    assert.equal(res.status, 409);
+    const t = await res.json();
+    assert.deepEqual([t.status, t.code, t.detail, t.type, t.existingTransactionId], [409, "duplicate-receipt", "Struk sudah dipakai.", "about:blank", 42]);
   });
 
   it("MulterError lain memuat nama field yang bermasalah", async () => {

@@ -2,8 +2,9 @@ import { STATUS_CODES } from "node:http";
 import { HttpError } from "../utils/httpError.js";
 
 // Semua respons galat berbentuk application/problem+json (RFC 9457, api-contract 2.3).
-function problem(res, status, code, detail, errors) {
+function problem(res, status, code, detail, errors, extra) {
   const body = {
+    ...extra,
     type: "about:blank",
     title: STATUS_CODES[status] ?? "Error",
     status,
@@ -23,7 +24,7 @@ export function errorHandler(err, req, res, next) {
   if (res.headersSent) return next(err);
 
   if (err instanceof HttpError) {
-    return problem(res, err.status, err.code, err.message, err.errors);
+    return problem(res, err.status, err.code, err.message, err.errors, err.extra);
   }
 
   if (err?.type === "entity.parse.failed") {

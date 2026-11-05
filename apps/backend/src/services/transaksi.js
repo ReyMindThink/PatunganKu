@@ -6,6 +6,7 @@ import { TRANSAKSI } from "../config/constants.js";
 import { catatAudit } from "../utils/audit.js";
 import { rentangBulanWib } from "../utils/bulanWib.js";
 import { HttpError } from "../utils/httpError.js";
+import { muatTransaksi } from "../utils/muatTransaksi.js";
 import { objekTransaksi } from "../utils/objekTransaksi.js";
 import { bagiMerata } from "../utils/pembagian.js";
 import { ambilHalaman } from "../utils/pagination.js";
@@ -20,16 +21,7 @@ const PILIH = {
 const konflik = (pesan) => new HttpError(409, "invalid-state", pesan);
 
 export function buatLayananTransaksi({ db, ledger, sekarang = Date.now }) {
-  // DRAFT hanya terlihat penalangnya (orang lain 404). Aksi tulis oleh bukan penalang pada
-  // transaksi yang bukan DRAFT: 403.
-  async function muat(klien, ctx, transactionId, { tulis = false } = {}) {
-    const t = await klien.transaction.findFirst({ where: { id: transactionId, groupId: ctx.groupId }, select: PILIH });
-    if (t === null) throw new HttpError(404, "not-found", "Transaksi tidak ditemukan.");
-    const penalang = t.payerId === ctx.userId;
-    if (t.status === "DRAFT" && penalang === false) throw new HttpError(404, "not-found", "Transaksi tidak ditemukan.");
-    if (tulis && penalang === false) throw new HttpError(403, "forbidden", "Hanya penalang yang dapat mengubah transaksi ini.");
-    return t;
-  }
+  const muat = (klien, ctx, transactionId, opsi) => muatTransaksi(klien, ctx, transactionId, { ...opsi, pilih: PILIH });
 
   async function bacaDetail(klien, ctx, transactionId) {
     const t = await klien.transaction.findFirst({
@@ -137,5 +129,5 @@ export function buatLayananTransaksi({ db, ledger, sekarang = Date.now }) {
     return { transaction: await bacaDetail(tx, ctx, transactionId), approval: null };
   }
 
-  return { buat, ubah, hapus, daftar, detail, submit };
+  return { buat, ubah, hapus, daftar, detail, submit, bacaDetail };
 }
