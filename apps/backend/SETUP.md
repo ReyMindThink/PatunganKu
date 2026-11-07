@@ -26,10 +26,9 @@ npm install
 cp .env.example .env
 ```
 
-Isi `.env.example` sudah sesuai untuk database Docker lokal, tidak perlu diubah.
+Isi `DB_PASSWORD` dan kata sandi di `DATABASE_URL` dengan kata sandi yang sama dengan `MSSQL_SA_PASSWORD` di `infra/.env` (dibuat di bagian 3). `.env.example` hanya berisi placeholder `GANTI_...`; jangan memakai kata sandi contoh dan jangan meng-commit `.env`.
 
-Password database mengandung karakter `#`, jadi nilainya wajib diberi tanda
-kutip. Tanpa kutip, `#` dibaca sebagai awal komentar dan password terpotong:
+Beri tanda kutip pada nilai yang mengandung karakter `#` atau `;`. Tanpa kutip, `#` dibaca sebagai awal komentar dan kata sandi terpotong:
 
 ```env
 DB_PASSWORD="GANTI_DENGAN_KATA_SANDI_KUAT"
