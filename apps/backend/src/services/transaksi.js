@@ -7,7 +7,9 @@ import { catatAudit } from "../utils/audit.js";
 import { rentangBulanWib } from "../utils/bulanWib.js";
 import { HttpError } from "../utils/httpError.js";
 import { muatTransaksi } from "../utils/muatTransaksi.js";
+import { objekApproval } from "../utils/objekApproval.js";
 import { objekTransaksi } from "../utils/objekTransaksi.js";
+import { pilihAturan } from "../utils/aturanPersetujuan.js";
 import { bagiMerata } from "../utils/pembagian.js";
 import { ambilHalaman } from "../utils/pagination.js";
 import { kursorTransaksiSkema } from "../validators/transaksi.validator.js";
@@ -96,7 +98,7 @@ export function buatLayananTransaksi({ db, ledger, sekarang = Date.now }) {
   }
 
   // Submit: DRAFT menjadi ACTIVE (struk VERIFIED, CHARGE ditulis) atau PENDING_APPROVAL (struk
-  // FAILED atau NEEDS_REVIEW, Approval menyusul di T1.8). Klaim status dilakukan lebih dulu
+  // FAILED atau NEEDS_REVIEW, dengan Approval dari T1.8). Klaim status dilakukan lebih dulu
   // supaya submit serentak: satu menang, yang lain 409 tanpa menulis apa pun.
   async function submit(tx, ctx, transactionId) {
     const t = await muat(tx, ctx, transactionId, { tulis: true });
@@ -114,19 +116,59 @@ export function buatLayananTransaksi({ db, ledger, sekarang = Date.now }) {
     });
     if (klaim.count === 0) throw konflik("Transaksi ini sudah dikirim.");
 
-    const anggota = await tx.groupMember.findMany({ where: { groupId: ctx.groupId, status: "ACTIVE" }, select: { userId: true } });
+    const anggota = await tx.groupMember.findMany({ where: { groupId: ctx.groupId, status: "ACTIVE" }, select: { userId: true, role: true } });
     const bagian = bagiMerata(t.amount, anggota.map((a) => a.userId));
+
+    // Struk FAILED atau NEEDS_REVIEW: pilih aturan persetujuan (T1.8). Tanpa pemilih sama
+    // sekali (mis. grup satu anggota) transaksi langsung berlaku dan dicatat di audit.
+    let statusAkhir = status;
+    let barisApproval = null;
+    let tanpaPemilih = false;
+    if (aktif === false) {
+      const aturan = pilihAturan({ pengajuId: ctx.userId, pengajuRole: ctx.role, anggota });
+      if (aturan === null) {
+        const langsung = await tx.transaction.updateMany({
+          where: { id: transactionId, groupId: ctx.groupId, payerId: ctx.userId, status: "PENDING_APPROVAL" },
+          data: { status: "ACTIVE", expiresAt: null },
+        });
+        if (langsung.count === 0) throw konflik("Transaksi ini sudah dikirim.");
+        statusAkhir = "ACTIVE";
+        tanpaPemilih = true;
+      } else {
+        barisApproval = await tx.approval.create({
+          data: { groupId: ctx.groupId, subjectType: "TRANSACTION", subjectId: transactionId, rule: aturan.rule, requestedBy: ctx.userId, eligibleCount: aturan.eligibleCount, required: aturan.required, expiresAt: kedaluwarsa },
+          select: { id: true, groupId: true, subjectType: true, subjectId: true, rule: true, requestedBy: true, eligibleCount: true, required: true, status: true, expiresAt: true, decidedAt: true, createdAt: true },
+        });
+      }
+    }
+
     for (const b of bagian) {
       await tx.transactionShare.create({ data: { transactionId, userId: b.userId, amount: b.amount, consent: "ACCEPTED", consentAt: new Date(sekarang()) } });
     }
-    if (aktif) {
+    if (statusAkhir === "ACTIVE") {
       await ledger.catatTanggungan(tx, { groupId: ctx.groupId, transactionId, penalangId: ctx.userId, bagian, kategori: "GROUP", createdBy: ctx.userId });
+    }
+    const nilaiAudit = { status: statusAkhir, amount: t.amount, mode: t.mode, receiptStatus: t.receiptStatus, participantCount: bagian.length };
+    if (barisApproval === null) {
+      if (tanpaPemilih) nilaiAudit.approval = "NO_VOTERS";
+    } else {
+      nilaiAudit.approvalId = barisApproval.id;
+      nilaiAudit.approvalRule = barisApproval.rule;
     }
     await catatAudit(tx, {
       groupId: ctx.groupId, actorId: ctx.userId, transactionId, entity: "Transaction", entityId: transactionId, action: "TRANSACTION_SUBMIT",
-      newValue: { status, amount: t.amount, mode: t.mode, receiptStatus: t.receiptStatus, participantCount: bagian.length },
+      newValue: nilaiAudit,
     });
-    return { transaction: await bacaDetail(tx, ctx, transactionId), approval: null };
+    const approval =
+      barisApproval === null
+        ? null
+        : objekApproval(
+            { ...barisApproval, requester: { id: t.payer.id, name: t.payer.name }, votes: [] },
+            { id: transactionId, description: t.description, amount: t.amount, mode: t.mode, receiptStatus: t.receiptStatus },
+            ctx,
+            sekarang(),
+          );
+    return { transaction: await bacaDetail(tx, ctx, transactionId), approval };
   }
 
   return { buat, ubah, hapus, daftar, detail, submit, bacaDetail };

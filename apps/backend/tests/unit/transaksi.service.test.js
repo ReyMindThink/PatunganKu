@@ -49,7 +49,8 @@ function buatDb(awal = {}) {
       },
     },
     receiptExtraction: { count: async (arg) => { catat("receiptExtraction.count", arg); return s.ekstraksi; } },
-    groupMember: { findMany: async (arg) => { catat("groupMember.findMany", arg); return s.anggota.map((userId) => ({ userId })); } },
+    groupMember: { findMany: async (arg) => { catat("groupMember.findMany", arg); return s.anggota.map((userId) => ({ userId, role: (s.peran ?? {})[userId] ?? "MEMBER" })); } },
+    approval: { create: async (arg) => { catat("approval.create", arg.data); return { id: 31, status: "OPEN", decidedAt: null, createdAt: new Date(0), ...arg.data }; } },
     transactionShare: { create: async ({ data }) => { catat("transactionShare.create", data); s.shares.push({ ...data }); return { id: 1 }; } },
     auditLog: { create: async (arg) => { catat("auditLog.create", arg.data); return { id: 1 }; } },
   };
@@ -179,17 +180,76 @@ describe("transaksi: submit", () => {
     assert.equal(hasil.transaction.participants.length, 3);
   });
 
-  it("struk FAILED atau NEEDS_REVIEW: PENDING_APPROVAL kedaluwarsa tepat 7 hari, share ditulis, tanpa CHARGE", async () => {
+  it("struk FAILED atau NEEDS_REVIEW: PENDING_APPROVAL kedaluwarsa tepat 7 hari, share ditulis, tanpa CHARGE, Approval dibuat dengan kedaluwarsa yang sama", async () => {
     for (const receiptStatus of ["FAILED", "NEEDS_REVIEW"]) {
       const d = buatDb();
       d.s.transaksi[5].receiptStatus = receiptStatus;
       const hasil = await layananDari(d, 5_000_000).submit(d.db, penalang, 5);
-      assert.deepEqual(ambil(d, "transaction.updateMany")[0].arg.data, { status: "PENDING_APPROVAL", expiresAt: new Date(5_000_000 + 7 * 24 * 60 * 60 * 1000) });
+      const kedaluwarsa = new Date(5_000_000 + 7 * 24 * 60 * 60 * 1000);
+      assert.deepEqual(ambil(d, "transaction.updateMany")[0].arg.data, { status: "PENDING_APPROVAL", expiresAt: kedaluwarsa });
       assert.equal(ambil(d, "transactionShare.create").length, 3);
       assert.equal(ambil(d, "ledger.catatTanggungan").length, 0);
-      assert.equal(JSON.parse(ambil(d, "auditLog.create")[0].arg.newValue).status, "PENDING_APPROVAL");
+      const audit = ambil(d, "auditLog.create")[0].arg;
+      assert.equal(JSON.parse(audit.newValue).status, "PENDING_APPROVAL");
+      assert.equal(JSON.parse(audit.newValue).approvalId, 31);
+      assert.equal(JSON.parse(audit.newValue).approvalRule, "QUORUM_20");
       assert.equal(hasil.transaction.status, "PENDING_APPROVAL");
+      assert.deepEqual(ambil(d, "approval.create")[0].arg, { groupId: 7, subjectType: "TRANSACTION", subjectId: 5, rule: "QUORUM_20", requestedBy: 1, eligibleCount: 2, required: 1, expiresAt: kedaluwarsa });
+      assert.deepEqual(ambil(d, "groupMember.findMany")[0].arg.select, { userId: true, role: true });
+      assert.equal(hasil.approval.id, 31);
+      assert.equal(hasil.approval.status, "OPEN");
+      assert.equal(hasil.approval.canVote, false);
+      assert.deepEqual(hasil.approval.subject, { transactionId: 5, description: "Makan", amount: 70000, mode: "EQUAL_ALL", receiptStatus });
+      assert.ok(urut(d, "transaction.updateMany", "approval.create"));
     }
+  });
+
+  it("aturan persetujuan saat submit: pengaju MEMBER ADMIN_ANY atas semua admin; admin dengan admin lain ADMIN_OTHER; admin tunggal QUORUM_20 (n = 6 butuh 2)", async () => {
+    const aturanDari = async (payerId, role, peran, anggota) => {
+      const d = buatDb({ anggota, peran });
+      d.s.transaksi[5].payerId = payerId;
+      d.s.transaksi[5].receiptStatus = "FAILED";
+      await layananDari(d).submit(d.db, { userId: payerId, groupId: 7, role }, 5);
+      const { rule, eligibleCount, required } = ambil(d, "approval.create")[0].arg;
+      return { rule, eligibleCount, required };
+    };
+    assert.deepEqual(await aturanDari(2, "MEMBER", { 1: "OWNER", 3: "ADMIN" }, [1, 2, 3, 4]), { rule: "ADMIN_ANY", eligibleCount: 2, required: 1 });
+    assert.deepEqual(await aturanDari(1, "OWNER", { 1: "OWNER", 3: "ADMIN" }, [1, 2, 3, 4]), { rule: "ADMIN_OTHER", eligibleCount: 1, required: 1 });
+    assert.deepEqual(await aturanDari(3, "ADMIN", { 1: "OWNER", 3: "ADMIN" }, [1, 2, 3]), { rule: "ADMIN_OTHER", eligibleCount: 1, required: 1 });
+    assert.deepEqual(await aturanDari(1, "OWNER", { 1: "OWNER" }, [1, 2, 3, 4, 5, 6, 7]), { rule: "QUORUM_20", eligibleCount: 6, required: 2 });
+  });
+
+  it("struk FAILED tanpa pemilih sama sekali: langsung ACTIVE, tanpa Approval, CHARGE ditulis, dicatat di audit", async () => {
+    const d = buatDb({ anggota: [1] });
+    d.s.transaksi[5].receiptStatus = "FAILED";
+    const hasil = await layananDari(d).submit(d.db, penalang, 5);
+    const klaim = ambil(d, "transaction.updateMany");
+    assert.equal(klaim.length, 2);
+    assert.equal(klaim[0].arg.data.status, "PENDING_APPROVAL");
+    assert.deepEqual(klaim[1].arg, { where: { id: 5, groupId: 7, payerId: 1, status: "PENDING_APPROVAL" }, data: { status: "ACTIVE", expiresAt: null } });
+    assert.equal(ambil(d, "approval.create").length, 0);
+    assert.equal(ambil(d, "ledger.catatTanggungan").length, 1);
+    assert.deepEqual(JSON.parse(ambil(d, "auditLog.create")[0].arg.newValue), { status: "ACTIVE", amount: 70000, mode: "EQUAL_ALL", receiptStatus: "FAILED", participantCount: 1, approval: "NO_VOTERS" });
+    assert.equal(hasil.approval, null);
+    assert.equal(hasil.transaction.status, "ACTIVE");
+    assert.equal(d.s.transaksi[5].expiresAt, null);
+  });
+
+  it("struk FAILED, pengaju MEMBER tanpa admin aktif lain: galat pemrogram, tanpa share, Approval, atau audit", async () => {
+    const d = buatDb({ anggota: [1, 2], peran: { 1: "MEMBER", 2: "MEMBER" } });
+    d.s.transaksi[5].receiptStatus = "FAILED";
+    await assert.rejects(() => layananDari(d).submit(d.db, { userId: 1, groupId: 7, role: "MEMBER" }, 5), /grup tanpa admin aktif/);
+    assert.equal(ambil(d, "transactionShare.create").length + ambil(d, "approval.create").length + ambil(d, "auditLog.create").length, 0);
+  });
+
+  it("klaim gagal pada penurunan ke ACTIVE tanpa pemilih: 409 tanpa share, CHARGE, atau audit", async () => {
+    const d = buatDb({ anggota: [1] });
+    d.s.transaksi[5].receiptStatus = "FAILED";
+    const asli = d.db.transaction.updateMany;
+    let ke = 0;
+    d.db.transaction.updateMany = async (arg) => (++ke === 2 ? { count: 0 } : asli(arg));
+    await assert.rejects(() => layananDari(d).submit(d.db, penalang, 5), galat(409, "invalid-state"));
+    assert.equal(ambil(d, "transactionShare.create").length + ambil(d, "ledger.catatTanggungan").length + ambil(d, "auditLog.create").length, 0);
   });
 
   it("submit serentak: klaim gagal (0 baris) 409 tanpa menulis share, CHARGE, atau audit", async () => {

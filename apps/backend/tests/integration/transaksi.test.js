@@ -226,6 +226,8 @@ describe("transaksi di SQL Server", () => {
     const h = await tulis(r.base + "/" + t.id + "/submit", "POST", a);
     assert.equal(h.status, 200);
     assert.equal(h.body.data.transaction.status, "PENDING_APPROVAL");
+    assert.deepEqual([h.body.data.approval.rule, h.body.data.approval.eligibleCount, h.body.data.approval.required, h.body.data.approval.status], ["QUORUM_20", 2, 1, "OPEN"]);
+    assert.equal(await prisma.approval.count({ where: { subjectId: t.id, groupId: r.grup.id } }), 1);
     const baris = await prisma.transaction.findUnique({ where: { id: t.id } });
     assert.ok(Math.abs(baris.expiresAt.getTime() - (mulai + 7 * HARI_MS)) < 60000, "kedaluwarsa harus sekitar 7 hari");
     assert.equal((await shareDari(t.id)).length, 3);
