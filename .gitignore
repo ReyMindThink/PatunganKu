@@ -26,3 +26,6 @@ Thumbs.db
 
 # Prisma generated client (hasil generate, jangan di-commit)
 apps/backend/src/generated/
+
+# Dump kode untuk dibagikan ke chat (bukan bagian repo)
+semua_code.txt
