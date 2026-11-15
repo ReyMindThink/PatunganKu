@@ -116,6 +116,19 @@ export function buatLayananLedger({ db }) {
       select: { type: true, sign: true, amount: true, debtorUserId: true, creditorUserId: true, category: true },
     });
 
+  // Ringkasan saldo banyak grup sekaligus (satu kueri): Map groupId ke ringkasan tiap grup.
+  async function ringkasanPerGrup(groupIds) {
+    for (const id of groupIds) if (idSah(id) === false) throw galat("groupId tidak sah");
+    if (groupIds.length === 0) return new Map();
+    const peta = new Map(groupIds.map((id) => [id, []]));
+    const entri = await db.ledgerEntry.findMany({
+      where: { groupId: { in: groupIds } },
+      select: { groupId: true, type: true, sign: true, amount: true, debtorUserId: true, creditorUserId: true, category: true },
+    });
+    for (const e of entri) peta.get(e.groupId).push(e);
+    return new Map([...peta.entries()].map(([id, daftar]) => [id, ringkasanSaldo(daftar)]));
+  }
+
   return {
     catatTanggungan,
     balikEntri,
@@ -123,5 +136,6 @@ export function buatLayananLedger({ db }) {
     ringkasan: async (groupId) => ringkasanSaldo(await bacaEntri(groupId)),
     rincian: async (groupId, userId) => rincianSaldo(await bacaEntri(groupId), userId),
     saldoPasangan: async (groupId, a, b) => saldoPasangan(await bacaEntri(groupId), a, b),
+    ringkasanPerGrup,
   };
 }

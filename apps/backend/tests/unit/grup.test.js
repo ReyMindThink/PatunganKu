@@ -160,7 +160,7 @@ describe("layanan grup: buat dan gabung", () => {
 });
 
 describe("layanan grup: baca", () => {
-  it("daftarSaya: hanya keanggotaan ACTIVE urut grup terbaru, hitungan anggota, pending per peran, balance 0", async () => {
+  it("daftarSaya: hanya keanggotaan ACTIVE urut grup terbaru, hitungan anggota, pending per peran, balance dari ledger", async () => {
     const tx = buatTx();
     tx.findManyKe = 0;
     const jawaban = [
@@ -174,19 +174,30 @@ describe("layanan grup: baca", () => {
       tx.log.push({ nama: "groupMember.findMany", arg });
       return jawaban[tx.findManyKe++];
     };
-    const hasil = await buatLayananGrup({ db: tx }).daftarSaya(2);
+    const panggilanLedger = [];
+    const ledger = {
+      ringkasanPerGrup: async (ids) => {
+        panggilanLedger.push(ids);
+        return new Map([
+          [9, [{ userId: 2, owes: 25000, owed: 0, balance: -25000 }, { userId: 3, owes: 0, owed: 25000, balance: 25000 }]],
+          [4, [{ userId: 9, owes: 0, owed: 10, balance: 10 }]],
+        ]);
+      },
+    };
+    const hasil = await buatLayananGrup({ db: tx, ledger }).daftarSaya(2);
+    assert.deepEqual(panggilanLedger, [[9, 4]]);
     const kueri = ambil(tx, "groupMember.findMany");
     assert.equal(kueri.length, 2);
     assert.deepEqual(kueri[0].arg.where, { userId: 2, status: "ACTIVE" });
     assert.deepEqual(kueri[0].arg.orderBy, { groupId: "desc" });
     assert.deepEqual(kueri[1].arg.where, { groupId: { in: [9, 4] }, status: "ACTIVE" });
     assert.deepEqual(hasil, [
-      { id: 9, name: "Trip", membership: "ACTIVE", myRole: "OWNER", memberCount: 3, balance: 0, pendingJoinRequests: 0 },
+      { id: 9, name: "Trip", membership: "ACTIVE", myRole: "OWNER", memberCount: 3, balance: -25000, pendingJoinRequests: 0 },
       { id: 4, name: "Kos", membership: "ACTIVE", myRole: "MEMBER", memberCount: 1, balance: 0, pendingJoinRequests: null },
     ]);
 
     const kosong = buatTx();
-    const hasilKosong = await buatLayananGrup({ db: kosong }).daftarSaya(3);
+    const hasilKosong = await buatLayananGrup({ db: kosong, ledger: { ringkasanPerGrup: async () => new Map() } }).daftarSaya(3);
     assert.deepEqual(hasilKosong, []);
     assert.equal(ambil(kosong, "groupMember.findMany").length, 1);
   });

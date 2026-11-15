@@ -11,6 +11,7 @@ import { buatAkses } from "../../src/middlewares/access.js";
 import { buatRequireAuth } from "../../src/middlewares/requireAuth.js";
 import { buatIdempotensi } from "../../src/utils/idempotency.js";
 import { buatLayananGrup } from "../../src/services/grup.js";
+import { buatLayananLedger } from "../../src/services/ledger.js";
 import { buatRouterGrup } from "../../src/routes/grup.router.js";
 
 const SECRET = "rahasia-integrasi-grup-yang-cukup-panjang-abcdef";
@@ -21,7 +22,7 @@ describe("grup di SQL Server", () => {
   let server;
   before(async () => {
     const router = buatRouterGrup({
-      layanan: buatLayananGrup({ db: prisma }),
+      layanan: buatLayananGrup({ db: prisma, ledger: buatLayananLedger({ db: prisma }) }),
       requireAuth: buatRequireAuth({ secret: SECRET }),
       requireActiveMember: buatAkses({ db: prisma }).requireActiveMember,
       idempoten: buatIdempotensi({ db: prisma }).idempoten,

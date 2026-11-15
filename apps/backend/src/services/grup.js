@@ -22,7 +22,7 @@ const objekGrup = (g, role, status, jumlah) => ({
   createdAt: g.createdAt,
 });
 
-export function buatLayananGrup({ db, kode = buatKodeGrup }) {
+export function buatLayananGrup({ db, ledger, kode = buatKodeGrup }) {
   // Tabrakan kode dikenali dengan membaca ulang. Dua pembuat yang memilih kode sama persis
   // pada saat yang sama (peluang sekitar 1 banding satu miliar) gagal di constraint unik.
   async function kodeBebas(tx) {
@@ -50,14 +50,17 @@ export function buatLayananGrup({ db, kode = buatKodeGrup }) {
     const aktif = ids.length === 0 ? [] : await db.groupMember.findMany({ where: { groupId: { in: ids }, status: "ACTIVE" }, select: { groupId: true } });
     const hitung = new Map();
     for (const a of aktif) hitung.set(a.groupId, (hitung.get(a.groupId) ?? 0) + 1);
-    // balance menunggu ledger (T1.6); pendingJoinRequests menunggu permintaan gabung (Tahap 2).
+    // balance = saldo bersih pemanggil di grup itu (owed dikurangi owes, dari ledger).
+    // pendingJoinRequests menunggu permintaan gabung (Tahap 2).
+    const saldo = await ledger.ringkasanPerGrup(ids);
+    const balanceDi = (groupId) => (saldo.get(groupId) ?? []).find((r) => r.userId === userId)?.balance ?? 0;
     return baris.map((b) => ({
       id: b.group.id,
       name: b.group.name,
       membership: b.status,
       myRole: b.role,
       memberCount: hitung.get(b.group.id) ?? 0,
-      balance: 0,
+      balance: balanceDi(b.group.id),
       pendingJoinRequests: b.role === "MEMBER" ? null : 0,
     }));
   }
