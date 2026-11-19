@@ -15,7 +15,7 @@ import { buatRouterStruk } from "./struk.router.js";
 const transaksi = buatLayananTransaksi({ db: prisma, ledger: buatLayananLedger({ db: prisma }) });
 const layanan = buatLayananStruk({
   penyimpanan: { simpan: uploadReceipt, baca: readReceiptBuffer, hapus: deleteReceipt },
-  pemverif: buatPemverifGemini({ apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL || "gemini-2.5-flash" }),
+  pemverif: buatPemverifGemini({ apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL || "gemini-3.5-flash-lite" }),
   bacaTransaksi: transaksi.bacaDetail,
 });
 // Verifikasi memanggil Gemini (maks STRUK.GEMINI_TIMEOUT_MS): batas transaksinya lebih panjang dari bawaan.
