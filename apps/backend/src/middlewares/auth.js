@@ -1,20 +1,10 @@
-import jwt from "jsonwebtoken";
+// Penyambung: menyuntikkan konfigurasi dan database asli ke pemeriksa murni.
+// Hanya berkas ini yang mengimpor env.js dan prisma.js; tes unit mengimpor
+// requireAuth.js dan access.js langsung.
 import { env } from "../config/env.js";
-import { HttpError } from "../utils/httpError.js";
+import { prisma } from "../lib/prisma.js";
+import { buatRequireAuth } from "./requireAuth.js";
+import { buatAkses } from "./access.js";
 
-export function requireAuth(req, res, next) {
-  const header = req.headers.authorization || "";
-  const [scheme, token] = header.split(" ");
-
-  if (scheme !== "Bearer" || !token) {
-    return next(new HttpError(401, "unauthorized", "Token tidak ditemukan"));
-  }
-
-  try {
-    const payload = jwt.verify(token, env.jwtSecret);
-    req.user = { id: Number(payload.sub) };
-    next();
-  } catch {
-    next(new HttpError(401, "unauthorized", "Token tidak valid atau kedaluwarsa"));
-  }
-}
+export const requireAuth = buatRequireAuth({ secret: () => env.jwtSecret });
+export const { requireMember, requireActiveMember, requireRole } = buatAkses({ db: prisma });

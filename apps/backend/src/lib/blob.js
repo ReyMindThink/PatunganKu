@@ -7,9 +7,9 @@ const CONTAINER = "receipts";
 let containerPromise;
 
 function getContainer() {
-  if (!containerPromise) {
+  if (containerPromise === undefined) {
     const conn = process.env.AZURE_STORAGE_CONNECTION_STRING;
-    if (!conn) throw new Error("AZURE_STORAGE_CONNECTION_STRING belum diisi di .env");
+    if (Boolean(conn) === false) throw new Error("AZURE_STORAGE_CONNECTION_STRING belum diisi di .env");
     const client = BlobServiceClient.fromConnectionString(conn).getContainerClient(CONTAINER);
     containerPromise = client.createIfNotExists().then(() => client);
     containerPromise.catch(() => {
@@ -38,4 +38,9 @@ export async function downloadReceipt(name) {
 export async function readReceiptBuffer(name) {
   const container = await getContainer();
   return container.getBlobClient(name).downloadToBuffer();
+}
+
+export async function deleteReceipt(name) {
+  const container = await getContainer();
+  await container.getBlobClient(name).deleteIfExists();
 }

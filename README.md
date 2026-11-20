@@ -121,7 +121,7 @@ Backend memakai Azure SQL Database. Untuk pengembangan lokal, jalankan SQL Serve
 ```bash
 docker run -d --name patunganku-db \
   -e "ACCEPT_EULA=Y" \
-  -e "MSSQL_SA_PASSWORD=YourStrong!Passw0rd" \
+  -e "MSSQL_SA_PASSWORD=GANTI_DENGAN_KATA_SANDI_KUAT" \
   -p 1433:1433 \
   mcr.microsoft.com/mssql/server:2022-latest
 ```
@@ -146,7 +146,7 @@ Contoh isi `.env` untuk lokal:
 
 ```env
 PORT=3000
-DATABASE_URL="sqlserver://localhost:1433;database=patunganku;user=sa;password=YourStrong!Passw0rd;trustServerCertificate=true"
+DATABASE_URL="sqlserver://localhost:1433;database=patunganku;user=sa;password=GANTI_DENGAN_KATA_SANDI_KUAT;trustServerCertificate=true"
 
 # Hanya dibutuhkan untuk fitur upload dan verifikasi struk
 AZURE_STORAGE_CONNECTION_STRING=
