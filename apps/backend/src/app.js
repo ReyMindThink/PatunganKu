@@ -9,15 +9,16 @@ import ringkasanRoutes from "./routes/ringkasan.routes.js";
 import { saldoGrup, saldoSaya } from "./routes/saldo.routes.js";
 import strukRoutes from "./routes/struk.routes.js";
 import { errorHandler, rutTidakDitemukan } from "./middlewares/errorHandler.js";
+import healthRoutes from "./routes/health.routes.js";
 
 const app = express();
+
+app.set("trust proxy", env.trustProxy);
 
 app.use(cors({ origin: env.corsOrigin }));
 app.use(express.json());
 
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
-});
+app.use("/api/health", healthRoutes);
 
 app.use("/api/auth", authRouter);
 app.use("/api/me", meRouter);

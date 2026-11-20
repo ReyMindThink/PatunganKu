@@ -1,28 +1,14 @@
 import "dotenv/config";
-import { z } from "zod";
+import { bacaEnv } from "./envSchema.js";
 
-const schema = z.object({
-  NODE_ENV: z.string().default("development"),
-  PORT: z.coerce.number().default(4000),
-  CORS_ORIGIN: z.string().default("*"),
-  JWT_SECRET: z.string().min(32, "JWT_SECRET minimal 32 karakter"),
-  JWT_EXPIRES_IN: z.string().default("1h"),
-});
+const hasil = bacaEnv(process.env);
 
-const parsed = schema.safeParse(process.env);
-
-if (!parsed.success) {
+if (hasil.ok === false) {
   console.error("Konfigurasi .env tidak valid:");
-  for (const issue of parsed.error.issues) {
-    console.error(`- ${issue.path.join(".")}: ${issue.message}`);
+  for (const galat of hasil.errors) {
+    console.error(`- ${galat.field}: ${galat.message}`);
   }
   process.exit(1);
 }
 
-export const env = {
-  nodeEnv: parsed.data.NODE_ENV,
-  port: parsed.data.PORT,
-  corsOrigin: parsed.data.CORS_ORIGIN,
-  jwtSecret: parsed.data.JWT_SECRET,
-  jwtExpiresIn: parsed.data.JWT_EXPIRES_IN,
-};
+export const env = hasil.env;
