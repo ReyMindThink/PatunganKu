@@ -8,6 +8,7 @@ import approvalRoutes from "./routes/approval.routes.js";
 import ringkasanRoutes from "./routes/ringkasan.routes.js";
 import { saldoGrup, saldoSaya } from "./routes/saldo.routes.js";
 import strukRoutes from "./routes/struk.routes.js";
+import { metodeSaya, metodeAnggota } from "./routes/metodeBayar.routes.js";
 import { errorHandler, rutTidakDitemukan } from "./middlewares/errorHandler.js";
 import healthRoutes from "./routes/health.routes.js";
 
@@ -24,11 +25,13 @@ app.use("/api/auth", authRouter);
 app.use("/api/me", meRouter);
 app.use("/api/me", ringkasanRoutes);
 app.use("/api/me", saldoSaya);
+app.use("/api/me", metodeSaya);
 app.use("/api/groups", groupRoutes);
 app.use("/api/groups", transaksiRoutes);
 app.use("/api/groups", approvalRoutes);
 app.use("/api/groups", strukRoutes);
 app.use("/api/groups", saldoGrup);
+app.use("/api/groups", metodeAnggota);
 
 app.use(rutTidakDitemukan);
 

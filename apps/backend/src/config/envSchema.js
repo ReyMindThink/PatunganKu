@@ -1,6 +1,7 @@
 // Pembacaan dan validasi konfigurasi lingkungan. Murni: sumber (process.env) disuntik,
 // jadi dapat diuji tanpa memanggil process.exit. config/env.js adalah penyambung tipis.
 import { z } from "zod";
+import { bacaKunci } from "../utils/enkripsi.js";
 
 const BOOL = z.enum(["true", "false"], { error: "harus true atau false" });
 const FORMAT_ORIGIN = /^https?:\/\/[^\s/]+$/;
@@ -14,6 +15,11 @@ const skema = z.object({
   TRUST_PROXY: z.coerce.number().int().min(0).max(5).default(0),
   DB_ENCRYPT: BOOL.default("false"),
   DB_TRUST_SERVER_CERT: BOOL.default("true"),
+  // Kunci enkripsi nomor rekening. Kosong sama dengan tidak diisi; bentuknya diperiksa di bacaEnv.
+  PAYMENT_ENC_KEY: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v.trim() === "" ? undefined : v.trim())),
 });
 
 // "*" atau daftar origin http(s) dipisah koma tanpa garis miring di akhir; null bila tidak sah.
@@ -38,7 +44,13 @@ export function bacaEnv(source) {
   if (corsOrigin === null) {
     galat.push({ field: "CORS_ORIGIN", message: "harus * atau daftar origin http(s) dipisah koma, tanpa garis miring di akhir" });
   }
+  const kunciBayar = d.PAYMENT_ENC_KEY;
+  const adaKunciBayar = (kunciBayar === undefined) === false;
+  if (adaKunciBayar && bacaKunci(kunciBayar) === null) {
+    galat.push({ field: "PAYMENT_ENC_KEY", message: "harus base64 dari 32 byte (buat dengan: node -e \"console.log(require('crypto').randomBytes(32).toString('base64'))\")" });
+  }
   if (d.NODE_ENV === "production") {
+    if (adaKunciBayar === false) galat.push({ field: "PAYMENT_ENC_KEY", message: "wajib di production" });
     if (corsOrigin === "*") galat.push({ field: "CORS_ORIGIN", message: "tidak boleh * di production: sebut origin frontend" });
     if ((d.DB_ENCRYPT === "true") === false) galat.push({ field: "DB_ENCRYPT", message: "harus true di production" });
     if ((d.DB_TRUST_SERVER_CERT === "false") === false) galat.push({ field: "DB_TRUST_SERVER_CERT", message: "harus false di production" });
@@ -55,6 +67,7 @@ export function bacaEnv(source) {
       trustProxy: d.TRUST_PROXY,
       dbEncrypt: d.DB_ENCRYPT === "true",
       dbTrustServerCert: d.DB_TRUST_SERVER_CERT === "true",
+      paymentEncKey: kunciBayar ?? null,
     },
   };
 }

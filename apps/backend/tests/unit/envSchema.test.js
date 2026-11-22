@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { bacaEnv, opsiDatabase } from "../../src/config/envSchema.js";
 
 const SECRET = "x".repeat(32);
+const KUNCI = Buffer.alloc(32, 7).toString("base64");
 const dasar = { JWT_SECRET: SECRET };
 const produksi = {
   NODE_ENV: "production",
@@ -10,6 +11,7 @@ const produksi = {
   CORS_ORIGIN: "https://patunganku.example.com",
   DB_ENCRYPT: "true",
   DB_TRUST_SERVER_CERT: "false",
+  PAYMENT_ENC_KEY: KUNCI,
 };
 const medan = (hasil) => hasil.errors.map((e) => e.field);
 
@@ -26,6 +28,7 @@ describe("bacaEnv: bawaan dan bentuk keluaran", () => {
       trustProxy: 0,
       dbEncrypt: false,
       dbTrustServerCert: true,
+      paymentEncKey: null,
     });
   });
 
@@ -164,9 +167,9 @@ describe("bacaEnv: aturan production", () => {
     assert.deepEqual(medan(h), ["DB_TRUST_SERVER_CERT"]);
   });
 
-  it("production tanpa mengisi apa pun selain JWT_SECRET melaporkan tiga galat", () => {
+  it("production tanpa mengisi apa pun selain JWT_SECRET melaporkan empat galat", () => {
     const h = bacaEnv({ NODE_ENV: "production", JWT_SECRET: SECRET });
-    assert.deepEqual(medan(h).sort(), ["CORS_ORIGIN", "DB_ENCRYPT", "DB_TRUST_SERVER_CERT"]);
+    assert.deepEqual(medan(h).sort(), ["CORS_ORIGIN", "DB_ENCRYPT", "DB_TRUST_SERVER_CERT", "PAYMENT_ENC_KEY"]);
   });
 
   it("CORS tidak sah di production hanya satu galat CORS", () => {
@@ -203,5 +206,36 @@ describe("opsiDatabase", () => {
 
   it("kunci lain diabaikan dan tidak melempar saat JWT_SECRET kosong", () => {
     assert.deepEqual(opsiDatabase({ DB_PASSWORD: "x" }), { encrypt: false, trustServerCertificate: true });
+  });
+});
+
+describe("bacaEnv: PAYMENT_ENC_KEY", () => {
+  it("opsional di luar production: tidak diisi atau kosong menjadi null", () => {
+    assert.equal(bacaEnv(dasar).env.paymentEncKey, null);
+    assert.equal(bacaEnv({ ...dasar, PAYMENT_ENC_KEY: "" }).env.paymentEncKey, null);
+    assert.equal(bacaEnv({ ...dasar, PAYMENT_ENC_KEY: "   " }).env.paymentEncKey, null);
+  });
+
+  it("kunci sah diteruskan apa adanya (spasi pinggir dipangkas)", () => {
+    assert.equal(bacaEnv({ ...dasar, PAYMENT_ENC_KEY: KUNCI }).env.paymentEncKey, KUNCI);
+    assert.equal(bacaEnv({ ...dasar, PAYMENT_ENC_KEY: " " + KUNCI + " " }).env.paymentEncKey, KUNCI);
+  });
+
+  it("kunci yang diisi tetapi tidak sah ditolak di semua lingkungan, tanpa membocorkan nilainya", () => {
+    for (const salah of ["pendek", "x".repeat(44), Buffer.alloc(16, 1).toString("base64"), Buffer.alloc(33, 1).toString("base64")]) {
+      const h = bacaEnv({ ...dasar, PAYMENT_ENC_KEY: salah });
+      assert.equal(h.ok, false, salah);
+      assert.deepEqual(medan(h), ["PAYMENT_ENC_KEY"]);
+      assert.equal(JSON.stringify(h.errors).includes(salah), false);
+    }
+    assert.deepEqual(medan(bacaEnv({ ...produksi, PAYMENT_ENC_KEY: "pendek" })), ["PAYMENT_ENC_KEY"]);
+  });
+
+  it("wajib di production: tidak diisi atau kosong ditolak", () => {
+    const { PAYMENT_ENC_KEY, ...tanpa } = produksi;
+    assert.equal(PAYMENT_ENC_KEY, KUNCI);
+    assert.deepEqual(medan(bacaEnv(tanpa)), ["PAYMENT_ENC_KEY"]);
+    assert.deepEqual(medan(bacaEnv({ ...tanpa, PAYMENT_ENC_KEY: "" })), ["PAYMENT_ENC_KEY"]);
+    assert.equal(bacaEnv(produksi).ok, true);
   });
 });
