@@ -110,8 +110,29 @@ export function buatLayananLedger({ db }) {
     return { entryIds: ids };
   }
 
-  const bacaEntri = (groupId) =>
-    db.ledgerEntry.findMany({
+  // Satu SETTLEMENT per pelunasan terkonfirmasi: debitur = pengirim, kreditur = penerima, sign -1.
+  // Keutuhan dijaga di sini: pelunasan harus ada, milik grup ini, cocok pihak dan nominalnya, dan
+  // belum pernah dicatat (satu pelunasan, satu SETTLEMENT).
+  async function catatPelunasan(tx, { groupId, paymentId, pengirimId, penerimaId, jumlah, createdBy }) {
+    for (const [nama, nilai] of [["groupId", groupId], ["paymentId", paymentId], ["pengirimId", pengirimId], ["penerimaId", penerimaId], ["createdBy", createdBy]]) {
+      if (idSah(nilai) === false) throw galat(nama + " harus bilangan bulat positif");
+    }
+    if (pengirimId === penerimaId) throw galat("pengirim dan penerima tidak boleh sama");
+    if (Number.isSafeInteger(jumlah) === false || jumlah <= 0) throw galat("jumlah harus bilangan bulat positif");
+    const bayar = await tx.paymentConfirmation.findUnique({ where: { id: paymentId }, select: { groupId: true, senderId: true, receiverId: true, amount: true } });
+    const cocok = Boolean(bayar) && bayar.groupId === groupId && bayar.senderId === pengirimId && bayar.receiverId === penerimaId && bayar.amount === jumlah;
+    if (cocok === false) throw galat("pelunasan tidak cocok dengan grup, pihak, atau nominal");
+    const ada = await tx.ledgerEntry.findFirst({ where: { type: "SETTLEMENT", paymentId }, select: { id: true } });
+    if (ada) throw galat("pelunasan ini sudah dicatat di ledger");
+    const baris = await tx.ledgerEntry.create({
+      data: { groupId, type: "SETTLEMENT", sign: -1, amount: BigInt(jumlah), debtorUserId: pengirimId, creditorUserId: penerimaId, paymentId, createdBy },
+      select: { id: true },
+    });
+    return { entryId: baris.id };
+  }
+
+  const bacaEntri = (groupId, klien = db) =>
+    klien.ledgerEntry.findMany({
       where: { groupId },
       select: { type: true, sign: true, amount: true, debtorUserId: true, creditorUserId: true, category: true },
     });
@@ -135,7 +156,9 @@ export function buatLayananLedger({ db }) {
     balikTanggungan,
     ringkasan: async (groupId) => ringkasanSaldo(await bacaEntri(groupId)),
     rincian: async (groupId, userId) => rincianSaldo(await bacaEntri(groupId), userId),
-    saldoPasangan: async (groupId, a, b) => saldoPasangan(await bacaEntri(groupId), a, b),
+    // klien opsional: klien transaksi (tx) supaya pembacaan ikut dalam kunci pemanggil.
+    saldoPasangan: async (groupId, a, b, klien) => saldoPasangan(await bacaEntri(groupId, klien), a, b),
+    catatPelunasan,
     ringkasanPerGrup,
   };
 }

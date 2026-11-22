@@ -9,6 +9,7 @@ import ringkasanRoutes from "./routes/ringkasan.routes.js";
 import { saldoGrup, saldoSaya } from "./routes/saldo.routes.js";
 import strukRoutes from "./routes/struk.routes.js";
 import { metodeSaya, metodeAnggota } from "./routes/metodeBayar.routes.js";
+import pelunasanRoutes from "./routes/pelunasan.routes.js";
 import { errorHandler, rutTidakDitemukan } from "./middlewares/errorHandler.js";
 import healthRoutes from "./routes/health.routes.js";
 
@@ -32,6 +33,7 @@ app.use("/api/groups", approvalRoutes);
 app.use("/api/groups", strukRoutes);
 app.use("/api/groups", saldoGrup);
 app.use("/api/groups", metodeAnggota);
+app.use("/api/groups", pelunasanRoutes);
 
 app.use(rutTidakDitemukan);
 
