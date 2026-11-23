@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import jwt from "jsonwebtoken";
 import { prisma } from "../helpers/db.js";
-import { buatUser, buatGrup, buatAnggota } from "../helpers/factories.js";
+import { buatUser, buatGrup, buatAnggota, buatMetode } from "../helpers/factories.js";
 import { mulaiAplikasi } from "../helpers/http.js";
 import { buatAkses } from "../../src/middlewares/access.js";
 import { buatRequireAuth } from "../../src/middlewares/requireAuth.js";
@@ -54,7 +54,11 @@ describe("persetujuan di SQL Server", () => {
   // Grup dengan anggota ACTIVE berperan sesuai daftar (anggota pertama harus OWNER).
   async function buatRuang(peran) {
     const user = [];
-    for (let i = 0; i < peran.length; i++) user.push(await buatUser());
+    for (let i = 0; i < peran.length; i++) {
+      const u = await buatUser();
+      await buatMetode(u.id);
+      user.push(u);
+    }
     const grup = await buatGrup(user[0].id);
     for (let i = 0; i < peran.length; i++) await buatAnggota(grup.id, user[i].id, { role: peran[i], status: "ACTIVE" });
     return { user, grup, t: "/groups/" + grup.id + "/transactions", a: "/groups/" + grup.id + "/approvals" };

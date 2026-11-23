@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import jwt from "jsonwebtoken";
 import { prisma } from "../helpers/db.js";
-import { buatUser, buatGrup, buatAnggota, buatTransaksi } from "../helpers/factories.js";
+import { buatUser, buatGrup, buatAnggota, buatTransaksi, buatMetode } from "../helpers/factories.js";
 import { mulaiAplikasi } from "../helpers/http.js";
 import { buatAkses } from "../../src/middlewares/access.js";
 import { buatRequireAuth } from "../../src/middlewares/requireAuth.js";
@@ -49,7 +49,11 @@ describe("transaksi di SQL Server", () => {
   // Grup dengan n anggota ACTIVE (anggota pertama OWNER dan penalang).
   async function buatRuang(n = 3) {
     const user = [];
-    for (let i = 0; i < n; i++) user.push(await buatUser());
+    for (let i = 0; i < n; i++) {
+      const u = await buatUser();
+      await buatMetode(u.id);
+      user.push(u);
+    }
     const grup = await buatGrup(user[0].id);
     for (let i = 0; i < n; i++) await buatAnggota(grup.id, user[i].id, { role: i === 0 ? "OWNER" : "MEMBER", status: "ACTIVE" });
     return { user, grup, base: "/" + grup.id + "/transactions" };

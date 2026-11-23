@@ -36,6 +36,11 @@ export function buatLedger(groupId, data) {
   return prisma.ledgerEntry.create({ data: { groupId, ...data } });
 }
 
+// Metode pembayaran aktif; bawaan CASH (tanpa penyedia dan nomor, sah menurut CK_PaymentMethod_details).
+export function buatMetode(userId, data = {}) {
+  return prisma.paymentMethod.create({ data: { userId, kind: "CASH", ...data } });
+}
+
 // Satu grup dengan pemilik dan satu anggota, plus satu transaksi ACTIVE.
 export async function buatSkenario() {
   const pemilik = await buatUser();

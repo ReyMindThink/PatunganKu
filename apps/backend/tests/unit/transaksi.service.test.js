@@ -7,7 +7,7 @@ import { kodeKursor } from "../../src/utils/pagination.js";
 function buatDb(awal = {}) {
   const s = {
     transaksi: { 5: { id: 5, groupId: 7, payerId: 1, description: "Makan", amount: 70000, mode: "EQUAL_ALL", status: "DRAFT", receiptUrl: "https://blob/struk", receiptStatus: "VERIFIED", version: 1, expiresAt: null, createdAt: new Date(0) } },
-    shares: [], anggota: [3, 1, 2], ekstraksi: 0, daftarHasil: [], ...awal,
+    shares: [], anggota: [3, 1, 2], ekstraksi: 0, daftarHasil: [], metode: [{ userId: 1, isActive: true }, { userId: 2, isActive: true }, { userId: 3, isActive: true }], ...awal,
   };
   const log = [];
   const catat = (nama, arg) => log.push({ nama, arg });
@@ -48,6 +48,7 @@ function buatDb(awal = {}) {
         return s.daftarHasil;
       },
     },
+    paymentMethod: { count: async (arg) => { catat("paymentMethod.count", arg); return s.metode.filter((m) => cocok(m, arg.where)).length; } },
     receiptExtraction: { count: async (arg) => { catat("receiptExtraction.count", arg); return s.ekstraksi; } },
     groupMember: { findMany: async (arg) => { catat("groupMember.findMany", arg); return s.anggota.map((userId) => ({ userId, role: (s.peran ?? {})[userId] ?? "MEMBER" })); } },
     approval: { create: async (arg) => { catat("approval.create", arg.data); return { id: 31, status: "OPEN", decidedAt: null, createdAt: new Date(0), ...arg.data }; } },
@@ -265,6 +266,58 @@ describe("transaksi: submit", () => {
     await layananDari(d).submit(d.db, penalang, 5);
     assert.deepEqual(ambil(d, "transactionShare.create").map((c) => [c.arg.userId, c.arg.amount]), [[1, 70000]]);
     assert.deepEqual(ambil(d, "ledger.catatTanggungan")[0].arg.bagian, [{ userId: 1, amount: 70000 }]);
+  });
+});
+
+describe("transaksi: submit dan K26 (metode pembayaran wajib)", () => {
+  const dengan = (ubah, metode) => { const d = buatDb(metode === undefined ? {} : { metode }); Object.assign(d.s.transaksi[5], ubah); return d; };
+
+  it("penalang tanpa metode aktif: 409 payment-method-required, tanpa klaim, peserta, share, CHARGE, atau audit", async () => {
+    for (const metode of [[], [{ userId: 1, isActive: false }], [{ userId: 2, isActive: true }, { userId: 3, isActive: true }]]) {
+      const d = dengan({}, metode);
+      await assert.rejects(() => layananDari(d).submit(d.db, penalang, 5), galat(409, "payment-method-required"), JSON.stringify(metode));
+      assert.deepEqual(tulisan(d), []);
+      assert.equal(ambil(d, "groupMember.findMany").length, 0);
+      assert.equal(ambil(d, "auditLog.create").length, 0);
+      assert.equal(d.s.transaksi[5].status, "DRAFT");
+    }
+  });
+
+  it("menghitung metode aktif milik pemanggil (userId dari ctx, isActive true)", async () => {
+    const d = dengan({ payerId: 2 }, [{ userId: 1, isActive: true }]);
+    await assert.rejects(() => layananDari(d).submit(d.db, anggotaBiasa, 5), galat(409, "payment-method-required"));
+    assert.deepEqual(ambil(d, "paymentMethod.count")[0].arg, { where: { userId: 2, isActive: true } });
+    const e = dengan({ payerId: 2 }, [{ userId: 2, isActive: true }]);
+    const hasil = await layananDari(e).submit(e.db, anggotaBiasa, 5);
+    assert.equal(hasil.transaction.status, "ACTIVE");
+  });
+
+  it("satu metode aktif jenis apa pun cukup; submit tetap menulis seperti biasa", async () => {
+    const d = dengan({}, [{ userId: 1, isActive: true, kind: "CASH" }]);
+    const hasil = await layananDari(d).submit(d.db, penalang, 5);
+    assert.equal(hasil.transaction.status, "ACTIVE");
+    assert.equal(ambil(d, "ledger.catatTanggungan").length, 1);
+    assert.ok(urut(d, "paymentMethod.count", "transaction.updateMany"));
+  });
+
+  it("kesalahan lain didahulukan: bukan penalang, mode, struk wajib, struk belum diverifikasi tetap menang atas K26", async () => {
+    let d = dengan({}, []);
+    await assert.rejects(() => layananDari(d).submit(d.db, anggotaBiasa, 5), galat(404, "not-found"));
+    d = dengan({ status: "ACTIVE" }, []);
+    await assert.rejects(() => layananDari(d).submit(d.db, penalang, 5), galat(409, "invalid-state"));
+    d = dengan({ mode: "CUSTOM" }, []);
+    await assert.rejects(() => layananDari(d).submit(d.db, penalang, 5), (e) => e.status === 400 && e.errors[0].field === "mode");
+    d = dengan({ receiptUrl: null, receiptStatus: "PENDING" }, []);
+    await assert.rejects(() => layananDari(d).submit(d.db, penalang, 5), (e) => e.status === 400 && e.errors[0].field === "receipt");
+    d = dengan({ receiptStatus: "PENDING" }, []);
+    await assert.rejects(() => layananDari(d).submit(d.db, penalang, 5), galat(409, "invalid-state"));
+    assert.equal(ambil(d, "paymentMethod.count").length, 0);
+  });
+
+  it("struk FAILED juga wajib metode (jalur persetujuan tidak melewati K26)", async () => {
+    const d = dengan({ receiptStatus: "FAILED" }, []);
+    await assert.rejects(() => layananDari(d).submit(d.db, penalang, 5), galat(409, "payment-method-required"));
+    assert.equal(ambil(d, "approval.create").length, 0);
   });
 });
 

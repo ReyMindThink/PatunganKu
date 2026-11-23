@@ -107,6 +107,12 @@ export function buatLayananTransaksi({ db, ledger, sekarang = Date.now }) {
     if (Boolean(t.receiptUrl) === false) throw new HttpError(400, "validation-failed", "Data yang dikirim tidak valid.", [{ field: "receipt", message: "Foto struk wajib diunggah dan diverifikasi sebelum dikirim." }]);
     if (t.receiptStatus === "PENDING") throw konflik("Verifikasi struk belum dijalankan.");
 
+    // K26: penalang wajib punya minimal satu metode pembayaran aktif (jenis apa pun, termasuk tunai)
+    // supaya penerima pelunasan tahu ke mana membayar. Dibaca tanpa kunci: menonaktifkan metode
+    // terakhir sudah dikunci di layanan metode, dan submit hanya membaca.
+    const metodeAktif = await tx.paymentMethod.count({ where: { userId: ctx.userId, isActive: true } });
+    if (metodeAktif === 0) throw new HttpError(409, "payment-method-required", "Tambahkan minimal satu metode pembayaran aktif sebelum mengirim transaksi.");
+
     const aktif = t.receiptStatus === "VERIFIED";
     const status = aktif ? "ACTIVE" : "PENDING_APPROVAL";
     const kedaluwarsa = aktif ? null : new Date(sekarang() + TRANSAKSI.KEDALUWARSA_HARI * HARI_MS);
