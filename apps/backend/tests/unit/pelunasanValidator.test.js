@@ -35,21 +35,33 @@ describe("kirimPelunasanSchema", () => {
     assert.deepEqual(medan(kirimPelunasanSchema.safeParse({ methodType: "CASH" })), ["amount", "receiverId"]);
   });
 
-  it("hanya CASH yang didukung sampai 9b-2b; BANK dan EWALLET ditolak dengan pesan jelas, jenis lain berbeda", () => {
+  it("BANK dan EWALLET wajib methodId (bilangan bulat positif); CASH tidak boleh membawanya", () => {
     for (const jenis of ["BANK", "EWALLET"]) {
-      const h = kirimPelunasanSchema.safeParse({ ...sah, methodType: jenis });
-      assert.deepEqual(medan(h), ["methodType"]);
-      assert.match(h.error.issues[0].message, /belum didukung/);
+      assert.deepEqual(kirimPelunasanSchema.parse({ ...sah, methodType: jenis, methodId: "3" }), { receiverId: 5, amount: 10000, methodType: jenis, methodId: 3 });
+      assert.deepEqual(kirimPelunasanSchema.parse({ ...sah, methodType: jenis, methodId: 3, note: " x " }), { receiverId: 5, amount: 10000, methodType: jenis, methodId: 3, note: "x" });
+      assert.deepEqual(medan(kirimPelunasanSchema.safeParse({ ...sah, methodType: jenis })), ["methodId"]);
+      for (const buruk of ["0", "-1", "abc", "1.5", "", null, "2147483648"]) {
+        const h = kirimPelunasanSchema.safeParse({ ...sah, methodType: jenis, methodId: buruk });
+        assert.deepEqual(medan(h), ["methodId"], jenis + " " + String(buruk));
+      }
     }
+    assert.equal(kirimPelunasanSchema.safeParse({ ...sah, methodType: "CASH", methodId: "3" }).success, false);
+  });
+
+  it("methodType selain BANK, EWALLET, CASH, atau kosong: galat di field methodType", () => {
     for (const jenis of ["cash", "QRIS", "", null, undefined, 1]) {
-      const h = kirimPelunasanSchema.safeParse({ ...sah, methodType: jenis });
+      const h = kirimPelunasanSchema.safeParse({ ...sah, methodType: jenis, methodId: "3" });
       assert.deepEqual(medan(h), ["methodType"], String(jenis));
+      assert.equal(h.error.issues[0].message, "methodType harus BANK, EWALLET, atau CASH");
     }
   });
 
   it("kunci asing ditolak (methodId, onBehalfOfFund, id, senderId, status)", () => {
     for (const ekstra of [{ methodId: "3" }, { onBehalfOfFund: "true" }, { id: 1 }, { senderId: 2 }, { status: "CONFIRMED" }, { proof: "x" }]) {
       assert.equal(kirimPelunasanSchema.safeParse({ ...sah, ...ekstra }).success, false, JSON.stringify(ekstra));
+    }
+    for (const ekstra of [{ onBehalfOfFund: "true" }, { id: 1 }, { senderId: 2 }, { status: "CONFIRMED" }, { proof: "x" }, { proofUrl: "x" }, { methodProvider: "x" }]) {
+      assert.equal(kirimPelunasanSchema.safeParse({ ...sah, methodType: "BANK", methodId: "3", ...ekstra }).success, false, "BANK " + JSON.stringify(ekstra));
     }
   });
 });

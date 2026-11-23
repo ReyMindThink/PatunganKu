@@ -31,8 +31,9 @@ function cocok(row, w) {
 
 // Database dan ledger palsu di memori; mencatat urutan panggilan dan membatalkan perubahan bila
 // transaksi melempar (meniru rollback). BUKAN bukti SQL Server (itu tugas tes integrasi).
-function buat({ rows = [], saldo = {}, grup = { 7: { name: "Kos" } }, anggota = { "7:1": { status: "ACTIVE" }, "7:2": { status: "ACTIVE" }, "7:3": { status: "LEFT" } } } = {}) {
-  const s = { rows: rows.map((r) => ({ ...r })), audit: [], log: [], dipanggil: [], catat: [], gagalCatat: null, nomor: 100 };
+function buat({ rows = [], metode = [], saldo = {}, grup = { 7: { name: "Kos" } }, anggota = { "7:1": { status: "ACTIVE" }, "7:2": { status: "ACTIVE" }, "7:3": { status: "LEFT" } } } = {}) {
+  const blob = { simpan: [], hapus: [], gagalSimpan: null, gagalHapus: null, unduhGalat: null, unduhIsi: null };
+  const s = { rows: rows.map((r) => ({ ...r })), audit: [], log: [], dipanggil: [], catat: [], gagalCatat: null, nomor: 100, blob };
   const dengan = (r) => ({ ...r, sender: { id: r.senderId, name: "Pengguna " + r.senderId }, receiver: { id: r.receiverId, name: "Pengguna " + r.receiverId } });
   const pc = {
     findFirst: async ({ where }) => { s.log.push("pc.findFirst"); s.dipanggil.push(["findFirst", where]); const r = s.rows.find((x) => cocok(x, where)); return r === undefined ? null : dengan(r); },
@@ -60,6 +61,16 @@ function buat({ rows = [], saldo = {}, grup = { 7: { name: "Kos" } }, anggota = 
     },
     groupMember: { findUnique: async ({ where }) => { s.log.push("groupMember.findUnique"); const k = where.groupId_userId; return anggota[k.groupId + ":" + k.userId] ?? null; } },
     paymentConfirmation: pc,
+    paymentMethod: {
+      // Setia pada select: hanya kolom yang diminta yang dikembalikan (seperti Prisma).
+      findFirst: async ({ where, select }) => {
+        s.log.push("pm.findFirst");
+        s.dipanggil.push(["pm.findFirst", where, select]);
+        const m = metode.find((x) => cocok(x, where));
+        if (m === undefined) return null;
+        return Object.fromEntries(Object.entries(select).filter(([, minta]) => minta).map(([k]) => [k, m[k]]));
+      },
+    },
     auditLog: { create: async ({ data }) => { s.log.push("audit:" + data.action); s.audit.push(data); return { id: s.audit.length }; } },
   };
   const db = {
@@ -81,7 +92,12 @@ function buat({ rows = [], saldo = {}, grup = { 7: { name: "Kos" } }, anggota = 
     saldoPasangan: async (g, a, b, klien) => { s.log.push("saldo:" + a + ">" + b + ":" + (klien ? klien.penanda : "tanpa")); s.dipanggil.push(["saldo", g, a, b]); return saldo[a + ":" + b] ?? 0; },
     catatPelunasan: async (klien, arg) => { s.log.push("ledger.catat:" + klien.penanda); s.catat.push(arg); if (s.gagalCatat) throw s.gagalCatat; return { entryId: 1 }; },
   };
-  const layanan = buatLayananPelunasan({ db, ledger, jam: () => JAM });
+  const penyimpanan = {
+    simpan: async (buffer, tipe) => { s.log.push("blob.simpan"); if (blob.gagalSimpan) throw blob.gagalSimpan; const nama = "bukti-" + (blob.simpan.length + 1) + ".jpg"; blob.simpan.push({ buffer, tipe, nama }); return nama; },
+    hapus: async (nama) => { s.log.push("blob.hapus"); blob.hapus.push(nama); if (blob.gagalHapus) throw blob.gagalHapus; },
+    unduh: async (nama) => { s.log.push("blob.unduh:" + nama); if (blob.unduhGalat) throw blob.unduhGalat; return blob.unduhIsi ?? { buffer: Buffer.from("isi"), tipe: "image/jpeg" }; },
+  };
+  const layanan = buatLayananPelunasan({ db, ledger, penyimpanan, jam: () => JAM });
   // Pembungkus idempotensi menjalankan kirim dan konfirmasi di dalam transaksi: ditiru di sini.
   const dalamTx = (fn) => db.$transaction((t) => fn(t));
   return { s, db, tx, layanan, dalamTx };
@@ -89,6 +105,11 @@ function buat({ rows = [], saldo = {}, grup = { 7: { name: "Kos" } }, anggota = 
 const status = (e, kode, kodeGalat) => e instanceof HttpError && e.status === kode && e.code === kodeGalat;
 const galat = (janji, kode, kodeGalat) => assert.rejects(janji, (e) => status(e, kode, kodeGalat), kodeGalat);
 const isi = { receiverId: 1, amount: 10000, methodType: "CASH" };
+const JPEG = (n = 100) => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(n)]);
+const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(20)]);
+const WEBP = Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WEBP"), Buffer.alloc(10)]);
+const metodeBank = { id: 21, userId: 1, kind: "BANK", provider: "BCA", accountName: "Pemilik Satu", isActive: true };
+const metodeDompet = { id: 22, userId: 1, kind: "EWALLET", provider: "Dana", accountName: "Pemilik Satu", isActive: true };
 
 describe("pelunasan.kirim", () => {
   it("sukses: urutan periksa penerima, kunci grup, baca saldo lewat tx, baca tertunda, tulis, audit", async () => {
@@ -108,13 +129,6 @@ describe("pelunasan.kirim", () => {
     const a = t.s.audit[0];
     assert.deepEqual([a.groupId, a.actorId, a.entity, a.entityId, a.action], [7, 2, "PaymentConfirmation", 100, "PAYMENT_SUBMIT"]);
     assert.equal(a.newValue, JSON.stringify({ receiverId: 1, amount: 10000, methodType: "CASH" }));
-  });
-
-  it("jenis pembayaran diteruskan apa adanya ke tulisan dan audit (pembatasan jenis ada di validator)", async () => {
-    const t = buat({ saldo: { "2:1": 30000 } });
-    await t.dalamTx((tx) => t.layanan.kirim(tx, ctxKirim, { ...isi, methodType: "EWALLET" }));
-    assert.equal(t.s.dipanggil.find((d) => d[0] === "create")[1].methodType, "EWALLET");
-    assert.equal(t.s.audit[0].newValue, JSON.stringify({ receiverId: 1, amount: 10000, methodType: "EWALLET" }));
   });
 
   it("catatan yang tidak dikirim disimpan sebagai null", async () => {
@@ -187,6 +201,175 @@ describe("pelunasan.kirim", () => {
     t.tx.auditLog.create = async () => { throw new Error("audit gagal"); };
     await assert.rejects(t.dalamTx((tx) => t.layanan.kirim(tx, ctxKirim, isi)), /audit gagal/);
     assert.equal(t.s.rows.length, 0);
+  });
+});
+
+describe("pelunasan.kirim non-tunai (BANK dan EWALLET)", () => {
+  const bank = { ...isi, methodType: "BANK", methodId: 21 };
+  const kirimBank = (t, body = bank, bukti = { buffer: JPEG() }) => t.dalamTx((tx) => t.layanan.kirim(tx, ctxKirim, body, bukti));
+  const siap = (tambah = {}) => buat({ saldo: { "2:1": 30000 }, metode: [metodeBank, metodeDompet], ...tambah });
+
+  it("sukses: periksa metode, kunci, saldo, unggah blob, tulis dengan snapshot metode dan nama blob, audit memuat methodId", async () => {
+    const t = siap();
+    const hasil = await kirimBank(t);
+    assert.deepEqual(t.s.log, ["groupMember.findUnique", "pm.findFirst", "group.findUnique", "group.update", "saldo:2>1:tx", "pc.findMany", "blob.simpan", "pc.create", "audit:PAYMENT_SUBMIT"]);
+    assert.deepEqual(t.s.dipanggil.find((d) => d[0] === "pm.findFirst").slice(1), [{ id: 21, userId: 1, kind: "BANK", isActive: true }, { id: true, provider: true, accountName: true }]);
+    assert.deepEqual(t.s.dipanggil.find((d) => d[0] === "create")[1], {
+      groupId: 7, senderId: 2, receiverId: 1, amount: 10000, methodType: "BANK", note: null,
+      methodId: 21, methodProvider: "BCA", methodAccountName: "Pemilik Satu", proofUrl: "bukti-1.jpg",
+    });
+    assert.equal(t.s.blob.simpan.length, 1);
+    assert.equal(t.s.blob.simpan[0].tipe, "image/jpeg");
+    assert.equal(t.s.blob.simpan[0].buffer.length, JPEG().length);
+    assert.deepEqual(hasil.method, { id: 21, provider: "BCA", accountName: "Pemilik Satu" });
+    assert.equal(hasil.hasProof, true);
+    assert.equal(hasil.methodType, "BANK");
+    assert.equal(JSON.stringify(hasil).includes("bukti-1.jpg"), false);
+    assert.equal(t.s.audit[0].newValue, JSON.stringify({ receiverId: 1, amount: 10000, methodType: "BANK", methodId: 21 }));
+    assert.equal(t.s.blob.hapus.length, 0);
+  });
+
+  it("EWALLET dan tipe gambar PNG serta WebP diteruskan ke penyimpanan sesuai byte", async () => {
+    for (const [gambar, tipe] of [[PNG, "image/png"], [WEBP, "image/webp"], [JPEG(), "image/jpeg"]]) {
+      const t = siap();
+      const hasil = await kirimBank(t, { ...isi, methodType: "EWALLET", methodId: 22 }, { buffer: gambar });
+      assert.equal(t.s.blob.simpan[0].tipe, tipe);
+      assert.equal(hasil.methodType, "EWALLET");
+      assert.deepEqual(hasil.method, { id: 22, provider: "Dana", accountName: "Pemilik Satu" });
+    }
+  });
+
+  it("metode bukan milik penerima, nonaktif, jenis berbeda, atau tidak ada: 409 no-accepted-method tanpa kunci, unggah, dan tulis", async () => {
+    const kasus = [
+      [{ metode: [{ ...metodeBank, userId: 3 }] }, bank],
+      [{ metode: [{ ...metodeBank, isActive: false }] }, bank],
+      [{ metode: [metodeBank] }, { ...bank, methodType: "EWALLET" }],
+      [{ metode: [metodeDompet] }, bank],
+      [{ metode: [] }, bank],
+      [{ metode: [metodeBank] }, { ...bank, methodId: 999 }],
+    ];
+    for (const [tambah, body] of kasus) {
+      const t = siap(tambah);
+      await galat(kirimBank(t, body), 409, "no-accepted-method");
+      assert.equal(t.s.log.includes("group.update"), false);
+      assert.equal(t.s.blob.simpan.length, 0);
+      assert.equal(t.s.rows.length, 0);
+      assert.equal(t.s.audit.length, 0);
+    }
+  });
+
+  it("format bukan JPEG, PNG, atau WebP: 415 sebelum menyentuh database; lebih dari 5 MB: 413; tepat 5 MB lolos", async () => {
+    const a = siap();
+    await galat(kirimBank(a, bank, { buffer: Buffer.from("bukan gambar") }), 415, "unsupported-media-type");
+    assert.deepEqual(a.s.log, []);
+    const b = siap();
+    await galat(kirimBank(b, bank, { buffer: JPEG(5 * 1024 * 1024) }), 413, "payload-too-large");
+    assert.deepEqual(b.s.log, []);
+    const c = siap();
+    await kirimBank(c, bank, { buffer: JPEG(5 * 1024 * 1024 - 4) });
+    assert.equal(c.s.blob.simpan.length, 1);
+    const d = siap();
+    await galat(kirimBank(d, bank, { buffer: Buffer.alloc(0) }), 415, "unsupported-media-type");
+  });
+
+  it("penerima tidak sah, diri sendiri, atau nominal melebihi sisa: galat yang sama seperti tunai dan tanpa unggah", async () => {
+    const a = siap();
+    await galat(kirimBank(a, { ...bank, receiverId: 2 }), 400, "invalid-receiver");
+    const b = siap();
+    await galat(kirimBank(b, { ...bank, receiverId: 9 }), 400, "invalid-receiver");
+    const c = siap();
+    await assert.rejects(kirimBank(c, { ...bank, amount: 30001 }), (e) => status(e, 409, "amount-exceeds-debt") && e.extra.payable === 30000);
+    for (const t of [a, b, c]) assert.equal(t.s.blob.simpan.length, 0);
+  });
+
+  it("tulis atau audit gagal sesudah unggah: blob dihapus dan galat asli diteruskan", async () => {
+    const a = siap();
+    a.tx.paymentConfirmation.create = async () => { throw new Error("tulis gagal"); };
+    await assert.rejects(kirimBank(a), /tulis gagal/);
+    assert.deepEqual(a.s.blob.hapus, ["bukti-1.jpg"]);
+    const b = siap();
+    b.tx.auditLog.create = async () => { throw new Error("audit gagal"); };
+    await assert.rejects(kirimBank(b), /audit gagal/);
+    assert.deepEqual(b.s.blob.hapus, ["bukti-1.jpg"]);
+    assert.equal(b.s.rows.length, 0);
+  });
+
+  it("galat saat menghapus blob ditelan dan galat asli tetap yang keluar", async () => {
+    const t = siap();
+    t.s.blob.gagalHapus = new Error("hapus gagal");
+    t.tx.auditLog.create = async () => { throw new Error("audit gagal"); };
+    await assert.rejects(kirimBank(t), /audit gagal/);
+    assert.equal(t.s.blob.hapus.length, 1);
+  });
+
+  it("unggah blob gagal: galat diteruskan, tidak ada tulisan, dan tidak ada yang dihapus", async () => {
+    const t = siap();
+    t.s.blob.gagalSimpan = new Error("blob gagal");
+    await assert.rejects(kirimBank(t), /blob gagal/);
+    assert.equal(t.s.rows.length, 0);
+    assert.equal(t.s.blob.hapus.length, 0);
+  });
+
+  it("CASH mengabaikan bukti: tidak diunggah dan tidak ada kolom metode atau bukti pada tulisan", async () => {
+    const t = siap();
+    await t.dalamTx((tx) => t.layanan.kirim(tx, ctxKirim, isi, { buffer: JPEG() }));
+    assert.equal(t.s.blob.simpan.length, 0);
+    assert.deepEqual(Object.keys(t.s.dipanggil.find((d) => d[0] === "create")[1]).sort(), ["amount", "groupId", "methodType", "note", "receiverId", "senderId"]);
+    assert.equal(t.s.log.includes("pm.findFirst"), false);
+  });
+});
+
+describe("pelunasan.bukti", () => {
+  const berbukti = (tambah = {}) => baris(801, { methodType: "BANK", methodId: 21, methodProvider: "BCA", methodAccountName: "P", proofUrl: "bukti-9.png", ...tambah });
+
+  it("pengirim dan penerima menerima isi dan tipe berkas sesuai nama blob di pelunasan", async () => {
+    const t = buat({ rows: [berbukti()] });
+    t.s.blob.unduhIsi = { buffer: Buffer.from("png-isi"), tipe: "image/png" };
+    for (const ctx of [ctxKirim, ctxTerima]) {
+      const hasil = await t.layanan.bukti(ctx, 801);
+      assert.equal(hasil.buffer.toString(), "png-isi");
+      assert.equal(hasil.tipe, "image/png");
+    }
+    assert.equal(t.s.log.filter((l) => l === "blob.unduh:bukti-9.png").length, 2);
+  });
+
+  it("tipe yang bukan gambar kita sendiri menjadi application/octet-stream", async () => {
+    for (const tipe of ["text/html", "image/svg+xml", undefined, "", "image/gif"]) {
+      const t = buat({ rows: [berbukti()] });
+      t.s.blob.unduhIsi = { buffer: Buffer.from("x"), tipe };
+      assert.equal((await t.layanan.bukti(ctxTerima, 801)).tipe, "application/octet-stream", String(tipe));
+    }
+    for (const tipe of ["image/jpeg", "image/png", "image/webp"]) {
+      const t = buat({ rows: [berbukti()] });
+      t.s.blob.unduhIsi = { buffer: Buffer.from("x"), tipe };
+      assert.equal((await t.layanan.bukti(ctxTerima, 801)).tipe, tipe);
+    }
+  });
+
+  it("bukan pihak, grup lain, dan id tak ada: 404 tanpa membaca blob", async () => {
+    const t = buat({ rows: [berbukti(), berbukti({ id: 802, groupId: 8 })] });
+    await galat(t.layanan.bukti({ userId: 3, groupId: 7 }, 801), 404, "not-found");
+    await galat(t.layanan.bukti(ctxTerima, 802), 404, "not-found");
+    await galat(t.layanan.bukti(ctxTerima, 999), 404, "not-found");
+    assert.equal(t.s.log.some((l) => l.startsWith("blob.")), false);
+  });
+
+  it("pelunasan tunai tidak punya bukti: 404 tanpa membaca blob", async () => {
+    const t = buat({ rows: [baris(801)] });
+    await galat(t.layanan.bukti(ctxTerima, 801), 404, "not-found");
+    assert.equal(t.s.log.some((l) => l.startsWith("blob.")), false);
+  });
+
+  it("blob hilang (statusCode 404) menjadi 404 not-found; galat lain diteruskan apa adanya", async () => {
+    const a = buat({ rows: [berbukti()] });
+    a.s.blob.unduhGalat = Object.assign(new Error("blob tidak ada"), { statusCode: 404 });
+    await galat(a.layanan.bukti(ctxTerima, 801), 404, "not-found");
+    const b = buat({ rows: [berbukti()] });
+    b.s.blob.unduhGalat = Object.assign(new Error("azure mati"), { statusCode: 500 });
+    await assert.rejects(b.layanan.bukti(ctxTerima, 801), /azure mati/);
+    const c = buat({ rows: [berbukti()] });
+    c.s.blob.unduhGalat = new Error("tanpa kode");
+    await assert.rejects(c.layanan.bukti(ctxTerima, 801), /tanpa kode/);
   });
 });
 

@@ -1,9 +1,11 @@
-// Pelunasan bilateral (api-contract 10.4, T1.9b-2a: tunai). Pabrik murni: db, ledger, dan jam
-// disuntik. Kirim dan konfirmasi menerima tx dari pembungkus idempotensi; tolak dan batal membuka
+// Pelunasan bilateral (api-contract 10.4, T1.9b-2: tunai, BANK, EWALLET). Pabrik murni: db, ledger,
+// penyimpanan bukti, dan jam disuntik. Kirim dan konfirmasi menerima tx dari pembungkus idempotensi; tolak dan batal membuka
 // transaksi sendiri. Kunci pasangan = kunci baris Group (update tanpa perubahan nilai), dan saldo
 // dibaca lewat tx setelah kunci didapat, sehingga dua pelunasan serentak berjalan bergiliran.
+import { STRUK } from "../config/constants.js";
 import { HttpError } from "../utils/httpError.js";
 import { catatAudit } from "../utils/audit.js";
+import { detectImageType } from "../utils/imageType.js";
 import { ambilHalaman } from "../utils/pagination.js";
 import { kursorPelunasanSkema } from "../validators/pelunasan.validator.js";
 
@@ -31,7 +33,7 @@ export function objekPelunasan(b) {
   };
 }
 
-export function buatLayananPelunasan({ db, ledger, jam = () => new Date() }) {
+export function buatLayananPelunasan({ db, ledger, penyimpanan, jam = () => new Date() }) {
   const tidakAda = () => new HttpError(404, "not-found", "Pelunasan tidak ditemukan.");
   const sudahDiputuskan = () => new HttpError(409, "invalid-state", "Pelunasan ini sudah diputuskan atau dibatalkan.");
 
@@ -48,10 +50,25 @@ export function buatLayananPelunasan({ db, ledger, jam = () => new Date() }) {
     return baris;
   }
 
-  async function kirim(tx, ctx, { receiverId, amount, methodType, note }) {
+  // bukti = { buffer } wajib untuk BANK dan EWALLET (dijaga router), tidak dipakai untuk CASH.
+  async function kirim(tx, ctx, { receiverId, amount, methodType, methodId, note }, bukti) {
     if (receiverId === ctx.userId) throw new HttpError(400, "invalid-receiver", "Tidak dapat melunasi ke diri sendiri.");
+    const tunai = methodType === "CASH";
+    let tipe = null;
+    if (tunai === false) {
+      tipe = detectImageType(bukti.buffer);
+      if (tipe === null) throw new HttpError(415, "unsupported-media-type", "Format gambar harus JPEG, PNG, atau WebP.");
+      if (bukti.buffer.length > STRUK.UKURAN_MAKS) throw new HttpError(413, "payload-too-large", "Ukuran berkas maksimal 5 MB.");
+    }
     const anggota = await tx.groupMember.findUnique({ where: { groupId_userId: { groupId: ctx.groupId, userId: receiverId } }, select: { status: true } });
     if (anggota === null) throw new HttpError(400, "invalid-receiver", "Penerima bukan anggota grup ini.");
+    // Satu kode untuk semua penyebab (bukan milik penerima, nonaktif, jenis berbeda, tidak ada) agar
+    // keberadaan metode orang lain tidak bocor.
+    let metode = null;
+    if (tunai === false) {
+      metode = await tx.paymentMethod.findFirst({ where: { id: methodId, userId: receiverId, kind: methodType, isActive: true }, select: { id: true, provider: true, accountName: true } });
+      if (metode === null) throw new HttpError(409, "no-accepted-method", "Penerima tidak memiliki metode pembayaran aktif yang cocok.");
+    }
 
     await kunciGrup(tx, ctx.groupId);
     const saldo = await ledger.saldoPasangan(ctx.groupId, ctx.userId, receiverId, tx);
@@ -61,19 +78,33 @@ export function buatLayananPelunasan({ db, ledger, jam = () => new Date() }) {
       throw new HttpError(409, "amount-exceeds-debt", "Nominal melebihi sisa utang yang dapat dilunasi.", undefined, { payable: sisa });
     }
 
-    const baru = await tx.paymentConfirmation.create({
-      data: { groupId: ctx.groupId, senderId: ctx.userId, receiverId, amount, methodType, note: note ?? null },
-      include: DENGAN_PIHAK,
-    });
-    await catatAudit(tx, {
-      groupId: ctx.groupId,
-      actorId: ctx.userId,
-      entity: "PaymentConfirmation",
-      entityId: baru.id,
-      action: "PAYMENT_SUBMIT",
-      newValue: { receiverId, amount, methodType },
-    });
-    return objekPelunasan(baru);
+    // Blob diunggah paling akhir sebelum tulis; bila tulis atau audit gagal, blob dihapus (best-effort).
+    let nama = null;
+    try {
+      if (tunai === false) nama = await penyimpanan.simpan(bukti.buffer, tipe);
+      const data = { groupId: ctx.groupId, senderId: ctx.userId, receiverId, amount, methodType, note: note ?? null };
+      if (tunai === false) Object.assign(data, { methodId: metode.id, methodProvider: metode.provider, methodAccountName: metode.accountName, proofUrl: nama });
+      const baru = await tx.paymentConfirmation.create({ data, include: DENGAN_PIHAK });
+      const nilai = { receiverId, amount, methodType };
+      if (tunai === false) nilai.methodId = metode.id;
+      await catatAudit(tx, {
+        groupId: ctx.groupId,
+        actorId: ctx.userId,
+        entity: "PaymentConfirmation",
+        entityId: baru.id,
+        action: "PAYMENT_SUBMIT",
+        newValue: nilai,
+      });
+      return objekPelunasan(baru);
+    } catch (e) {
+      if (nama === null) throw e;
+      try {
+        await penyimpanan.hapus(nama);
+      } catch {
+        // Sisa blob dibersihkan job pembersih (Tahap 4); galat asli lebih penting.
+      }
+      throw e;
+    }
   }
 
   async function konfirmasi(tx, ctx, paymentId) {
@@ -144,6 +175,23 @@ export function buatLayananPelunasan({ db, ledger, jam = () => new Date() }) {
       action: "PAYMENT_CANCEL",
     });
 
+  const TIPE_BUKTI = ["image/jpeg", "image/png", "image/webp"];
+
+  // Hanya pengirim dan penerima (bacaMilik); tunai tidak punya bukti. Tipe dari blob dibatasi ke tiga
+  // tipe gambar yang kita unggah sendiri, selain itu octet-stream.
+  async function bukti(ctx, paymentId) {
+    const p = await bacaMilik(db, ctx, paymentId);
+    if (p.proofUrl === null) throw new HttpError(404, "not-found", "Pelunasan ini tidak memiliki bukti.");
+    let isi;
+    try {
+      isi = await penyimpanan.unduh(p.proofUrl);
+    } catch (e) {
+      if (Boolean(e) && e.statusCode === 404) throw new HttpError(404, "not-found", "Berkas bukti tidak ditemukan.");
+      throw e;
+    }
+    return { buffer: isi.buffer, tipe: TIPE_BUKTI.includes(isi.tipe) ? isi.tipe : "application/octet-stream" };
+  }
+
   async function detail(ctx, paymentId) {
     return objekPelunasan(await bacaMilik(db, ctx, paymentId));
   }
@@ -170,5 +218,5 @@ export function buatLayananPelunasan({ db, ledger, jam = () => new Date() }) {
     return { data: hasil.data.map(objekPelunasan), nextCursor: hasil.nextCursor, hasMore: hasil.hasMore };
   }
 
-  return { kirim, konfirmasi, tolak, batal, detail, daftar };
+  return { kirim, konfirmasi, tolak, batal, bukti, detail, daftar };
 }

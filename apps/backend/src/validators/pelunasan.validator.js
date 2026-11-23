@@ -9,12 +9,17 @@ const kosongJadiTiada = (v) => (v === "" ? undefined : v);
 const catatan = z.string().trim().max(PELUNASAN.CATATAN_MAKS, "Catatan maksimal " + PELUNASAN.CATATAN_MAKS + " karakter").optional().transform(kosongJadiTiada);
 const alasan = z.string().trim().max(PELUNASAN.ALASAN_MAKS, "Alasan maksimal " + PELUNASAN.ALASAN_MAKS + " karakter").optional().transform(kosongJadiTiada);
 
-// Sampai 9b-2b hanya CASH yang didukung; jenis lain dijawab 400 dengan pesan yang jelas.
-const jenis = z
-  .enum(["BANK", "EWALLET", "CASH"], { error: "methodType harus BANK, EWALLET, atau CASH" })
-  .refine((v) => PELUNASAN.METODE_DIDUKUNG.includes(v), "Jenis pembayaran ini belum didukung. Gunakan CASH.");
-
-export const kirimPelunasanSchema = z.strictObject({ receiverId: angka, amount: angka, methodType: jenis, note: catatan });
+// CASH hanya membawa nominal dan penerima; BANK dan EWALLET wajib methodId (metode aktif milik
+// penerima). Berkas bukti dicek di router karena bukan bagian dari field teks.
+const dasar = { receiverId: angka, amount: angka, note: catatan };
+export const kirimPelunasanSchema = z.discriminatedUnion(
+  "methodType",
+  [
+    z.strictObject({ ...dasar, methodType: z.literal("CASH") }),
+    z.strictObject({ ...dasar, methodType: z.enum(["BANK", "EWALLET"]), methodId: angka }),
+  ],
+  { error: "methodType harus BANK, EWALLET, atau CASH" },
+);
 export const tolakPelunasanSchema = z.strictObject({ reason: alasan });
 export const daftarPelunasanQuery = z.object({
   limit: limitSkema,
