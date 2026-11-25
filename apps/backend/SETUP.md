@@ -34,6 +34,33 @@ Beri tanda kutip pada nilai yang mengandung karakter `#` atau `;`. Tanpa kutip, 
 DB_PASSWORD="GANTI_DENGAN_KATA_SANDI_KUAT"
 ```
 
+## Variabel environment lain
+
+Variabel di bawah punya nilai bawaan untuk pengembangan lokal. Server memeriksa semuanya saat start dan berhenti dengan pesan per kolom bila ada yang tidak sah.
+
+| Variabel | Bawaan | Keterangan |
+| --- | --- | --- |
+| `NODE_ENV` | `development` | Pada `production`, server menolak CORS terbuka, koneksi database tanpa enkripsi, sertifikat server yang dipercaya begitu saja, dan `PAYMENT_ENC_KEY` yang kosong |
+| `PORT` | `4000` | Port server |
+| `CORS_ORIGIN` | `*` | `*` atau daftar origin `http(s)` dipisah koma, tanpa garis miring di akhir |
+| `JWT_SECRET` | wajib | Minimal 32 karakter |
+| `JWT_EXPIRES_IN` | `1h` | Masa berlaku token akses |
+| `GEMINI_API_KEY` | kosong | Hanya untuk verifikasi struk (lihat bagian Verifikasi struk di bawah) |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Model Gemini untuk verifikasi struk |
+| `AZURE_STORAGE_CONNECTION_STRING` | nilai Azurite di `.env.example` | Penyimpanan struk dan bukti pelunasan |
+| `PAYMENT_ENC_KEY` | kosong | Kunci AES-256 untuk nomor rekening: base64 dari 32 byte. Bila kosong, endpoint metode pembayaran menjawab 500 |
+| `TRUST_PROXY` | `0` | Jumlah proxy tepercaya di depan aplikasi (0 sampai 5), isi 1 di belakang Caddy |
+| `DB_ENCRYPT` | `false` | Koneksi SQL Server terenkripsi, wajib `true` di production |
+| `DB_TRUST_SERVER_CERT` | `true` | Percaya sertifikat server tanpa verifikasi, wajib `false` di production |
+
+Membuat `PAYMENT_ENC_KEY`:
+
+```bash
+command node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
+
+Tempel hasilnya ke `.env`. Kunci ini tidak boleh dikomit, dan kehilangan kunci berarti nomor rekening yang sudah tersimpan tidak bisa dibuka lagi.
+
 ## 3. Nyalakan database lokal (Docker)
 
 ```bash

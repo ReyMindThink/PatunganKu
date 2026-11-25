@@ -1,195 +1,179 @@
 # PatunganKu
 
-Aplikasi untuk mencatat, membagi, dan memverifikasi pengeluaran bersama dalam grup (kos, KKN, open trip). Foto struk diverifikasi oleh AI vision sebelum nominalnya masuk ke pembagian tagihan, dan riwayat disimpan di Azure.
+Aplikasi untuk mencatat, membagi, dan memverifikasi pengeluaran bersama dalam grup (kos, KKN, open trip). Foto struk diverifikasi AI sebelum nominalnya masuk tagihan. PatunganKu bukan payment gateway: aplikasi mencatat siapa berutang kepada siapa dan mengonfirmasi pelunasan, tetapi tidak memindahkan uang.
 
-Senior Project, DTETI FT UGM, Kelompok 12.
+Senior Project, DTETI FT UGM, Kelompok 12 (Senior Project Jaringan Komputer, Komputasi Awan, dan AI).
 
-## Anggota
+## Rumusan masalah dan solusi
 
-| Nama                             | NIM                | Peran                             |
-| -------------------------------- | ------------------ | --------------------------------- |
-| Bintang Khalifa Hadianto (Ketua) | 24/534951/TK/59312 | AI Engineer, Software Engineer    |
-| Aqidatul Izzah                   | 24/533730/TK/59137 | UI/UX, Software Engineer          |
-| Rasyid Rayhan Novandy            | 24/545518/TK/60688 | Cloud Engineer, Software Engineer |
+**Masalah.** Patungan di grup biasanya dicatat manual. Nominal sering dipertanyakan karena tidak ada bukti, dan setelah banyak transaksi sulit menentukan siapa masih berutang kepada siapa.
 
-## Status Pengembangan
+**Solusi.** Penalang mengunggah foto struk dan AI memeriksanya: apakah itu struk, apakah totalnya terbaca, apakah total sama dengan nominal yang diinput, dan apakah struk yang sama pernah dipakai. Nominal yang lolos dibagi ke anggota dengan pembulatan yang adil dan dicatat di buku besar (ledger) yang tidak bisa diubah. Saldo dihitung per pasangan anggota, dan pelunasan dikonfirmasi oleh penerimanya. Struk yang gagal diverifikasi tidak ditolak mentah-mentah, tetapi diputuskan anggota lewat persetujuan.
 
-| Bagian   | Status |
-| -------- | ------ |
-| Backend  | Struktur API sudah ada: auth, grup, transaksi, struk, saldo (ledger), dan pembayaran. |
-| Frontend | Prototype web (React + TypeScript). Halaman masuk, beranda grup, dan form grup sudah ada, tetapi masih memakai data contoh (`mock.ts`) dan belum terhubung ke backend. |
+## Status per 24 November 2026
+
+| Bagian | Status | Bukti |
+| --- | --- | --- |
+| Backend v2 | 39 endpoint berjalan (37 domain dan 2 kesehatan) | CI hijau pada commit `7c1f566`: 655 tes unit dan 134 tes integrasi di SQL Server 2022 asli |
+| Verifikasi struk AI | Berjalan lewat Gemini API dengan ekstraksi minimal (struk atau bukan, total, keyakinan, nama toko, waktu) | Satu foto uji asap berhasil. Belum ada angka akurasi resmi, jadi tidak ada klaim akurasi di sini |
+| Container | Dockerfile dan compose produksi terbukti berjalan lokal (build, health, berhenti bersih) | Dibuktikan di mesin pengembang, bukan di CI |
+| Penyimpanan berkas | Unggah, baca, dan hapus terbukti terhadap Azurite (emulator lokal) | Belum diuji terhadap Azure Blob sungguhan |
+| Azure | Belum ada sumber daya yang dibuat | Rencana jaringan dan deploy ada di `docs/deploy-azure.md` (draf) |
+| Frontend | Prototype React dengan data contoh | Belum memanggil API backend sama sekali |
+| Model YOLOv8 | Dikerjakan terpisah (AI Engineer) | Belum terintegrasi ke backend |
+
+Backend v2 ada di branch `545518` (PR #54, draft). Branch `main` masih berisi backend v1 sebagai cadangan.
+
+## Fitur yang berjalan (backend)
+
+| Area | Endpoint (semua di bawah `/api`) |
+| --- | --- |
+| Kesehatan | `GET /health`, `GET /health/ready` |
+| Akun | `POST /auth/register`, `POST /auth/login`, `GET` dan `PATCH /me`, `POST /me/password`, `GET /me/summary` |
+| Grup | `POST /groups`, `GET /groups`, `POST /groups/join`, `GET /groups/:groupId`, `GET /groups/:groupId/members` |
+| Transaksi | `POST` dan `GET /groups/:groupId/transactions`, `GET`, `PATCH`, `DELETE .../transactions/:transactionId`, `POST .../submit` |
+| Struk | `POST .../transactions/:transactionId/receipt` (unggah), `POST .../receipt/verify` |
+| Persetujuan | `GET .../approvals`, `GET .../approvals/:approvalId`, `POST .../approvals/:approvalId/votes` |
+| Saldo | `GET /me/balances`, `GET /groups/:groupId/balances`, `GET .../balances/:userId` |
+| Metode pembayaran | `GET` dan `POST /me/payment-methods`, `PATCH` dan `DELETE /me/payment-methods/:methodId`, `GET /groups/:groupId/members/:userId/payment-methods` |
+| Pelunasan | `POST` dan `GET /groups/:groupId/payments`, `GET .../payments/:paymentId`, `GET .../proof`, `POST .../confirm`, `.../reject`, `.../cancel` |
+
+Kontrak lengkap (isi permintaan, respons, kode galat) ada di `docs/api-contract.md`.
+
+## Cara kerja inti
+
+1. Anggota membuat grup lalu teman bergabung dengan kode grup (maksimal 50 anggota).
+2. Penalang membuat draft transaksi, mengunggah foto struk, lalu memverifikasinya. Hasilnya `VERIFIED`, `NEEDS_REVIEW`, atau `FAILED` beserta alasannya.
+3. Saat dikirim (submit), struk `VERIFIED` langsung menjadi transaksi aktif dan dibagi rata ke anggota aktif. Struk yang gagal masuk jalur persetujuan: pemilih menyetujui atau menolak, dengan kuorum yang dihitung dari jumlah pemilih.
+4. Setiap pembagian ditulis ke ledger. Selisih pembulatan dibagi dengan metode sisa terbesar, misalnya Rp70.000 untuk 3 orang menjadi 23.334, 23.333, dan 23.333.
+5. Saldo dihitung per pasangan anggota. Utang A ke B dan B ke A saling mengurangi.
+6. Pengutang mengirim pelunasan (tunai, atau transfer dengan foto bukti). Penerima mengonfirmasi, dan baru saat itu saldo berkurang. Nominal pelunasan tidak boleh melebihi sisa utang.
+
+Penalang wajib punya minimal satu metode pembayaran aktif sebelum bisa mengirim transaksi. Nomor rekening disimpan terenkripsi.
 
 ## Teknologi
 
-| Bagian            | Teknologi                |
-| ----------------- | ------------------------ |
-| Backend           | Node.js, Express, Prisma |
-| Database          | Azure SQL Database       |
-| Penyimpanan struk | Azure Blob Storage       |
-| Verifikasi struk  | AI vision                |
-| Frontend          | React + TypeScript, Vite |
-| Kontainer         | Docker, Docker Compose   |
-| CI/CD             | GitHub Actions           |
+| Bagian | Teknologi |
+| --- | --- |
+| Backend | Node.js (v22 atau lebih baru), Express 5, JavaScript ESM |
+| Database | SQL Server 2022 lewat Prisma 7 (Docker untuk lokal, Azure SQL direncanakan) |
+| Penyimpanan berkas | Azure Blob Storage (Azurite untuk lokal) |
+| Verifikasi struk | Gemini API lewat REST |
+| Validasi dan keamanan | zod, bcryptjs, jsonwebtoken (HS256), multer |
+| Frontend | React 19, TypeScript, Vite, pnpm |
+| Kontainer | Docker dan Docker Compose |
+| CI | GitHub Actions (SQL Server sebagai service container) |
 
-## Arsitektur
-
-Request dari anggota grup masuk ke `app.js`, diteruskan ke route, lalu ke service yang berisi logika bisnis. Service mengakses database lewat Prisma. Untuk struk, `receipt.service.js` mengunggah gambar ke Azure Blob Storage dan meminta `receiptVerifier.js` memverifikasi gambar lewat layanan AI vision.
-
-```
-Anggota grup -> app.js -> routes -> services -> Prisma -> SQL database
-                                        |-> blob.js (Azure Blob Storage)
-                                        |-> receiptVerifier.js -> AI vision
-```
-
-| Resource    | Route                  | Service                  |
-| ----------- | ---------------------- | ------------------------ |
-| Auth        | `auth.routes.js`        | `auth.service.js`        |
-| Grup        | `group.routes.js`       | `group.service.js`       |
-| Transaksi   | `transaction.routes.js` | `transaction.service.js` |
-| Struk       | `receipt.routes.js`     | `receipt.service.js`     |
-| Saldo       | `ledger.routes.js`      | `ledger.service.js`      |
-| Pembayaran  | `payment.routes.js`     | `payment.service.js`     |
-
-## Struktur Repository
+## Arsitektur backend
 
 ```
-PatunganKU/
+Klien -> app.js -> rute -> layanan -> Prisma -> SQL Server
+                    |        |-> lib/blob.js (Azure Blob / Azurite)
+                    |        |-> lib/pemverifGemini.js (Gemini API)
+                    |-> middleware: requireAuth, requireMember, validate, idempoten
+```
+
+Beberapa keputusan desain yang dibuktikan tes:
+
+- **Ledger tambah-saja.** Tabel `LedgerEntry`, `AuditLog`, dan `ReceiptExtraction` dilindungi trigger yang menolak UPDATE dan DELETE. Koreksi dilakukan dengan entri pembalik.
+- **Uang berupa bilangan bulat rupiah.** Nominal ledger memakai BigInt dan pembagian memakai metode sisa terbesar, jadi total selalu persis.
+- **Idempotensi.** Endpoint tulis memakai header `Idempotency-Key`. Permintaan yang diulang dengan kunci sama tidak menulis dua kali, dan kegagalan 409 membatalkan seluruh transaksi.
+- **Kunci baris Group.** Pelunasan serentak untuk pasangan yang sama berjalan bergiliran, sehingga nominal tidak bisa melebihi utang.
+- **Pemeriksaan konfigurasi.** Server menolak start di mode production bila CORS terbuka, koneksi tanpa enkripsi, atau kunci enkripsi nomor rekening belum diisi.
+
+## Struktur repository
+
+```
+PatunganKu/
 ├── apps/
 │   ├── backend/
-│   │   ├── prisma/          # schema database dan migration
-│   │   └── src/
-│   │       ├── app.js       # aplikasi Express, mount semua route
-│   │       ├── config/      # env loader, konstanta
-│   │       ├── controllers/ # terima request, panggil service, bentuk response
-│   │       ├── routes/      # endpoint per resource
-│   │       ├── middlewares/ # auth, error handler, dll.
-│   │       ├── services/    # logika bisnis (split bill, verifikasi struk, dll.)
-│   │       ├── validators/  # skema validasi input request
-│   │       ├── lib/         # prisma.js, blob.js, receiptVerifier.js
-│   │       └── utils/       # helper umum
-│   └── frontend/
-│       └── src/
-│           ├── main.tsx     # entry point
-│           ├── App.tsx      # state routing antar halaman
-│           ├── pages/       # AuthPage, HomePage, GroupFormPage
-│           ├── components/  # AuthForm, Receipt, GroupRow, Button, Field, IconButton, Rings
-│           ├── data/        # mock.ts (data contoh)
-│           └── lib/         # format.ts (format mata uang)
-├── docs/
-│   └── postman/             # koleksi Postman untuk mencoba API
-├── infra/                   # konfigurasi infrastruktur (Docker, Azure)
-├── site/                    # halaman GitHub Pages kelompok
-└── .github/                 # workflow CI/CD, template issue dan PR
+│   │   ├── prisma/        # skema, migration (SQL Server)
+│   │   ├── scripts/       # pemeriksa sintaks, penilai verifikasi struk
+│   │   ├── src/
+│   │   │   ├── config/    # env (divalidasi), konstanta
+│   │   │   ├── lib/       # prisma, blob, pemverifikasi Gemini, shutdown
+│   │   │   ├── middlewares/
+│   │   │   ├── routes/    # pabrik router murni dan penyambungnya
+│   │   │   ├── services/  # logika bisnis (pabrik murni, dependensi disuntik)
+│   │   │   ├── utils/     # pembagian, saldo, idempotensi, audit, enkripsi
+│   │   │   └── validators/
+│   │   └── tests/         # unit (tanpa database) dan integrasi (SQL Server)
+│   └── frontend/          # prototype React
+├── docs/                  # arsitektur, kontrak API, roadmap, panduan demo, deploy
+├── infra/                 # compose pengembangan dan produksi, Caddyfile, SQL akun aplikasi
+├── site/                  # halaman GitHub Pages kelompok
+└── .github/               # workflow CI, template issue dan PR
 ```
 
-## Menjalankan di Lokal
+## Menjalankan di lokal
 
-### Prasyarat
-
-- [Git](https://git-scm.com/)
-- [Node.js](https://nodejs.org/) LTS (disarankan v20 atau lebih baru) beserta npm
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (untuk database lokal)
-- [Postman](https://www.postman.com/) (opsional, untuk mencoba API)
-
-### 1. Clone repository
+Backend v2 ada di branch `545518`. Panduan lengkap beserta pemecahan masalah ada di `apps/backend/SETUP.md`. Ringkasnya:
 
 ```bash
 git clone https://github.com/ReyMindThink/PatunganKu.git
 cd PatunganKu
-```
+git checkout 545518
 
-### 2. Jalankan frontend (prototype)
+cd infra
+cp .env.example .env            # isi kata sandi kuat di infra/.env
+docker compose up -d --wait     # SQL Server dan Azurite
 
-Frontend tidak membutuhkan backend karena masih memakai data contoh, jadi bagian ini bisa dijalankan sendiri.
-
-```bash
-cd apps/frontend
+cd ../apps/backend
 npm install
+cp .env.example .env            # isi kata sandi, JWT_SECRET, dan PAYMENT_ENC_KEY
+# buat database patunganku_v2 lalu: npx prisma migrate deploy (lihat SETUP.md bagian 4)
 npm run dev
+curl http://localhost:4000/api/health
 ```
 
-Buka alamat yang tampil di terminal (biasanya `http://localhost:5173`).
+Prasyarat: Git, Node.js 22 atau lebih baru, Docker Desktop. Kunci Gemini diperlukan hanya untuk verifikasi struk.
 
-<!-- TODO: cocokkan dengan "scripts" di apps/frontend/package.json -->
-
-### 3. Jalankan backend
-
-#### a. Siapkan database lokal
-
-Backend memakai Azure SQL Database. Untuk pengembangan lokal, jalankan SQL Server di Docker:
-
-```bash
-docker run -d --name patunganku-db \
-  -e "ACCEPT_EULA=Y" \
-  -e "MSSQL_SA_PASSWORD=GANTI_DENGAN_KATA_SANDI_KUAT" \
-  -p 1433:1433 \
-  mcr.microsoft.com/mssql/server:2022-latest
-```
-
-<!-- TODO: jika infra/ sudah berisi docker-compose.yml, ganti dengan:
-     docker compose -f infra/docker-compose.yml up -d -->
-
-#### b. Install dependensi
+## Tes dan CI
 
 ```bash
 cd apps/backend
-npm install
+npm run check               # pemeriksaan sintaks semua berkas
+npm test                    # 655 tes unit, tanpa database
+npm run test:integration    # 134 tes di SQL Server (DB_NAME harus berakhiran _test)
 ```
 
-#### c. Atur environment variable
+Pada setiap push, GitHub Actions menjalankan pemeriksaan sintaks, tes unit, migrasi ke database kosong, pemeriksaan bahwa skema Prisma sama dengan migration, lalu tes integrasi di SQL Server 2022 asli. Tes integrasi tidak berjalan di CI untuk jalur Gemini dan Azure Blob: keduanya memakai pengganti di tes.
 
-```bash
-cp .env.example .env
-```
+## Panduan demo
 
-Contoh isi `.env` untuk lokal:
+Langkah demo end-to-end (daftar, grup, struk, saldo, pelunasan) ada di `docs/panduan-demo.md`. Demo membutuhkan satu foto struk milik sendiri dan kunci Gemini.
 
-```env
-PORT=3000
-DATABASE_URL="sqlserver://localhost:1433;database=patunganku;user=sa;password=GANTI_DENGAN_KATA_SANDI_KUAT;trustServerCertificate=true"
+## Dokumentasi
 
-# Hanya dibutuhkan untuk fitur upload dan verifikasi struk
-AZURE_STORAGE_CONNECTION_STRING=
-AZURE_STORAGE_CONTAINER=receipts
-AI_VISION_API_KEY=
-```
+| Berkas | Isi |
+| --- | --- |
+| `docs/architecture.md` | Keputusan produk, ERD, aturan persetujuan, hak akses, koreksi desain |
+| `docs/api-contract.md` | Kontrak API |
+| `docs/roadmap.md` | Rencana tahap dan acceptance (status per issue ada di GitHub) |
+| `docs/deploy-azure.md` | Rencana jaringan dan deploy Azure (draf, belum dijalankan) |
+| `docs/frontend-brief.md` | Catatan untuk frontend |
+| `docs/panduan-demo.md` | Panduan demo |
+| `apps/backend/SETUP.md` | Setup backend dan pemecahan masalah |
 
-<!-- TODO: samakan nama variabel dengan apps/backend/.env.example dan src/config/ -->
+Koleksi Postman di `docs/postman/` masih untuk backend v1 dan belum diperbarui.
 
-#### d. Siapkan skema database
+## Keamanan
 
-```bash
-npx prisma generate
-npx prisma migrate dev
-```
+- Rahasia tidak ada di repository: `.env` diabaikan Git, compose menolak start tanpa kata sandi dari `infra/.env`, dan kata sandi lama yang pernah bocor sudah tidak berlaku.
+- Kata sandi pengguna di-hash dengan bcrypt (batas 72 byte dihitung dalam byte UTF-8), token JWT HS256 berlaku 1 jam, dan percobaan masuk dibatasi lajunya.
+- Nomor rekening dienkripsi AES-256-GCM dan terikat ke pemiliknya. Bukti pelunasan disimpan di container privat dan hanya dibaca lewat backend oleh pihak terkait.
+- Akun aplikasi non-sa untuk database tersedia (`infra/sql/akun-app-azure.sql`) dan terbukti menjalankan 94 tes integrasi (jumlah saat diuji) tanpa hak DDL, tetapi belum dipakai di deploy.
 
-#### e. Jalankan server
+Batas yang diketahui: tidak ada refresh token (token berlaku 1 jam tanpa pencabutan), pembatas laju hanya di memori satu instance, `npm audit` belum ditriase, dan riwayat Git publik masih memuat nilai kata sandi lama yang sudah dinonaktifkan.
 
-```bash
-npm run dev
-```
+## Yang sengaja tidak ada
 
-Server berjalan di `http://localhost:3000`.
+Pembagian selain rata untuk semua anggota (subset, kustom, per item), dana kelompok, notifikasi dan email, chat, real-time (Socket.IO), peran admin tambahan dan undangan, serta refresh token. Semuanya direncanakan di tahap berikutnya pada `docs/roadmap.md` dan dipotong dari jalur minimum Senior Project. Verifikasi struk memakai Gemini sementara merangkap tahap deteksi yang semula direncanakan untuk YOLOv8.
 
-<!-- TODO: cocokkan dengan "scripts" di apps/backend/package.json (dev / start) -->
+## Anggota
 
-#### f. Coba API
-
-Import koleksi di folder `docs/postman/` ke Postman, lalu atur base URL ke `http://localhost:3000`.
-
-### Masalah umum
-
-| Masalah | Solusi |
-| ------- | ------ |
-| `Login failed for user 'sa'` | Pastikan password di `DATABASE_URL` sama dengan `MSSQL_SA_PASSWORD` dan kontainer sudah selesai start (tunggu sekitar 20 detik). |
-| Port 1433, 3000, atau 5173 sudah dipakai | Hentikan proses lain atau ganti port. |
-| `prisma migrate` gagal terhubung | Cek `docker ps`, pastikan `patunganku-db` berstatus `Up`. |
-| Fitur upload struk error | Isi variabel Azure Blob dan AI vision di `.env`. |
-| Frontend tidak memuat data dari backend | Memang belum terhubung, frontend masih memakai `mock.ts`. |
-
-## Panduan Menambah Kode Backend
-
-- Endpoint baru: tambah file di `routes/`, logikanya di `controllers/`
-- Aturan bisnis (hitung split, cek saldo, dll.): taruh di `services/`, jangan di controller
-- Perlu koneksi ke layanan luar (database, storage, AI): buat file baru di `lib/`
-- Validasi input form/body: skema di `validators/`, dipanggil sebelum controller
+| Nama | NIM | Peran |
+| --- | --- | --- |
+| Bintang Khalifa Hadianto (Ketua) | 24/534951/TK/59312 | AI Engineer, Software Engineer |
+| Aqidatul Izzah | 24/533730/TK/59137 | UI/UX, Software Engineer |
+| Rasyid Rayhan Novandy | 24/545518/TK/60688 | Cloud Engineer, Software Engineer |
