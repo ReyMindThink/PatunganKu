@@ -37,6 +37,17 @@ BUKTI="/jalur/ke/bukti.jpg"     # ganti dengan gambar bukti transfer apa saja
 AMOUNT=0                        # ganti dengan TOTAL yang tertulis pada struk (rupiah bulat)
 ```
 
+## Token berlaku satu jam
+
+Token akses habis setelah satu jam. Bila perintah berikutnya menjawab `undefined` atau `unauthorized`, masuk ulang dengan perintah ini (variabel `S` dan id tetap berlaku), lalu ulangi perintah yang gagal:
+
+```bash
+login() { curl -s -X POST "$BASE/auth/login" -H "Content-Type: application/json" -d "{\"email\":\"demo-$1-$S@example.com\",\"password\":\"RahasiaDemo123\"}"; }
+TA=$(login a | J data.accessToken); TB=$(login b | J data.accessToken); TC=$(login c | J data.accessToken)
+```
+
+Untuk demo di depan penilai, jalankan semua langkah dalam satu jam setelah mendaftar.
+
 ## Langkah demo
 
 ### 1. Kesehatan server
@@ -73,12 +84,12 @@ echo "grup $GID, kode $CODE"
 ### 4. B dan C bergabung dengan kode
 
 ```bash
-api POST /groups/join "$TB" "{\"code\":\"$CODE\"}" | J data.memberCount
-api POST /groups/join "$TC" "{\"code\":\"$CODE\"}" | J data.memberCount
-api GET /groups/$GID/members "$TA" | J data
+api POST /groups/join "$TB" "{\"code\":\"$CODE\"}" | J data.outcome
+api POST /groups/join "$TC" "{\"code\":\"$CODE\"}" | J data.outcome
+api GET /groups/$GID/members "$TA" | J data.length
 ```
 
-Harapan: jumlah anggota menjadi 2 lalu 3, dan daftar anggota memuat ketiganya.
+Harapan: `JOINED` dua kali, lalu jumlah anggota 3.
 
 ### 5. A menambah metode pembayaran
 
@@ -87,7 +98,10 @@ Penalang wajib punya minimal satu metode pembayaran aktif sebelum bisa mengirim 
 ```bash
 M=$(api POST /me/payment-methods "$TA" '{"kind":"BANK","provider":"BCA","accountNo":"1234567890","accountName":"Demo A"}')
 MID=$(echo "$M" | J data.id); echo "metode $MID"
+api GET /groups/$GID/members/$IDA/payment-methods "$TB" | J code
 ```
+
+Harapan: id metode berupa angka, dan perintah terakhir menjawab `forbidden`: B belum berutang kepada A, jadi tidak boleh melihat metode (dan nomor rekening) A.
 
 ### 6. A membuat draft transaksi
 
@@ -107,15 +121,18 @@ echo "keputusan: $(echo "$V" | J data.decision)"
 echo "terbaca: $(echo "$V" | J data.detected)"
 ```
 
-Harapan: keputusan `VERIFIED` dengan alasan `ok` dan total terbaca sama dengan `AMOUNT`. Hasil lain (`FAILED` atau `NEEDS_REVIEW`) dijelaskan pada langkah 12. Verifikasi memanggil Gemini dan bisa memakan beberapa detik.
+Harapan: keputusan `VERIFIED` dengan alasan `ok` dan total terbaca sama dengan `AMOUNT`. Verifikasi memanggil Gemini dan bisa memakan beberapa detik.
+
+Bila hasilnya `FAILED` dengan alasan `total-mismatch`, `detected.total` adalah total yang dibaca AI dan `detected.confidence` keyakinannya. Pada latihan dengan foto struk yang blur, AI membaca Rp50.000 (keyakinan 0,85) sehingga nominal Rp100.000 ditolak. Ada dua pilihan: lanjut ke jalur persetujuan (langkah 8 dan 12), atau mengubah nominal menjadi total yang terbaca lalu mengulang langkah 7 (nominal baru mereset status struk ke `PENDING`, dan verifikasi ulang mengirim foto ke Gemini lagi). Alasan lain (`low-confidence`, `total-unreadable`, `not-a-receipt`) juga berstatus `FAILED`.
 
 ### 8. Submit
 
 ```bash
-api POST /groups/$GID/transactions/$TID/submit "$TA" | J data.transaction.status
+SB=$(api POST /groups/$GID/transactions/$TID/submit "$TA")
+echo "status: $(echo "$SB" | J data.transaction.status)"
 ```
 
-Harapan: `ACTIVE`. Pembagian rata ke tiga anggota dan entri ledger tertulis dalam satu transaksi database. Kalau A belum punya metode pembayaran (langkah 5 dilewati), jawabannya 409 `payment-method-required` dan tidak ada yang tertulis.
+Harapan: `ACTIVE` bila struk `VERIFIED`. Bila struk `FAILED` atau `NEEDS_REVIEW`, hasilnya `PENDING_APPROVAL` dan respons memuat `data.approval`; lanjutkan ke langkah 12 untuk menyetujuinya, lalu kembali ke langkah 9. Pembagian rata ke tiga anggota dan entri ledger tertulis dalam satu transaksi database. Kalau A belum punya metode pembayaran (langkah 5 dilewati), jawabannya 409 `payment-method-required` dan tidak ada yang tertulis.
 
 ### 9. Saldo
 
@@ -125,7 +142,7 @@ OWE_B=$(api GET /groups/$GID/balances/$IDB "$TB" | J data.owes); echo "B berutan
 OWE_C=$(api GET /groups/$GID/balances/$IDC "$TC" | J data.owes); echo "C berutang: $OWE_C"
 ```
 
-Harapan: B dan C masing-masing berutang sepertiga nominal kepada A. Bila nominal tidak habis dibagi tiga, selisih rupiah dibagi dengan metode sisa terbesar (Rp70.000 menjadi 23.334, 23.333, 23.333), sehingga jumlah bagian selalu persis sama dengan nominal.
+Harapan: B dan C masing-masing berutang sepertiga nominal kepada A. Pada latihan dengan nominal Rp100.000, A (yang id-nya terkecil) mendapat bagian Rp33.334 dan menanggung sisa satu rupiah, sedangkan B dan C masing-masing berutang Rp33.333. Bila nominal tidak habis dibagi tiga, selisih rupiah dibagi dengan metode sisa terbesar (Rp70.000 menjadi 23.334, 23.333, 23.333), sehingga jumlah bagian selalu persis sama dengan nominal.
 
 ### 10. B melunasi dengan tunai
 
@@ -156,26 +173,30 @@ Harapan: pelunasan memuat metode bank A (hanya penyedia dan nama pemilik, tanpa 
 Nominal berlebih ditolak. B sudah lunas, jadi ia tidak boleh mengirim pelunasan lagi:
 
 ```bash
-curl -s -X POST "$BASE/groups/$GID/payments" -H "Authorization: Bearer $TB" -H "Idempotency-Key: $(U)" -F receiverId=$IDA -F amount=1000 -F methodType=CASH | J code
+OV=$(curl -s -X POST "$BASE/groups/$GID/payments" -H "Authorization: Bearer $TB" -H "Idempotency-Key: $(U)" -F receiverId=$IDA -F amount=1000 -F methodType=CASH)
+echo "$OV" | J code; echo "$OV" | J payable
 ```
 
-Harapan: `amount-exceeds-debt`.
+Harapan: `amount-exceeds-debt`, dan `payable` bernilai 0 (sisa yang boleh dilunasi).
 
-Bila verifikasi struk pada langkah 7 menghasilkan `FAILED` atau `NEEDS_REVIEW` (misalnya total pada struk tidak sama dengan nominal), submit tidak langsung menjadikan transaksi aktif, melainkan menunggu persetujuan:
+Bila verifikasi struk pada langkah 7 menghasilkan `FAILED` atau `NEEDS_REVIEW` (misalnya total pada struk tidak sama dengan nominal), submit pada langkah 8 tidak langsung menjadikan transaksi aktif, melainkan menunggu persetujuan. Lanjutkan dengan respons submit tadi:
 
 ```bash
-api POST /groups/$GID/transactions/$TID/submit "$TA" | J data.transaction.status    # PENDING_APPROVAL
-AID=$(api GET /groups/$GID/approvals "$TB" | J data.0.id)
-api POST /groups/$GID/approvals/$AID/votes "$TB" '{"vote":"APPROVE"}' | J data
+AID=$(echo "$SB" | J data.approval.id)
+echo "dibutuhkan $(echo "$SB" | J data.approval.required) dari $(echo "$SB" | J data.approval.eligibleCount) pemilih"
+api GET /groups/$GID/approvals/$AID "$TA" | J data.canVote
+api GET /groups/$GID/approvals/$AID "$TB" | J data.canVote
+api POST /groups/$GID/approvals/$AID/votes "$TB" '{"vote":"APPROVE"}' | J data.status
+api GET /groups/$GID/transactions/$TID "$TA" | J data.status
 ```
 
-Pemilih adalah anggota aktif selain pengaju. Dengan tiga anggota dan satu admin, satu suara setuju cukup. Setelah disetujui, transaksi menjadi `ACTIVE` dan langkah 9 dan seterusnya berlaku sama.
+Harapan: `dibutuhkan 1 dari 2 pemilih`, `false` untuk A (pengaju tidak boleh memilih sendiri), `true` untuk B, lalu `APPROVED` dan transaksi menjadi `ACTIVE`. Pemilih adalah anggota aktif selain pengaju. Karena A satu-satunya admin dan sekaligus pengaju, aturannya `QUORUM_20`: 20 persen pemilih dibulatkan ke atas, minimal 1 dan maksimal 5. Setelah transaksi aktif, langkah 9 dan seterusnya berlaku sama.
 
 ## Kesalahan umum
 
 | Gejala | Penyebab dan tindakan |
 | --- | --- |
-| 401 | Token tidak ada atau kedaluwarsa (berlaku 1 jam). Daftar atau masuk lagi |
+| 401, atau hasil `undefined` | Token tidak ada atau kedaluwarsa (berlaku 1 jam). Masuk ulang dengan perintah di bagian Token berlaku satu jam |
 | 400 pada field `Idempotency-Key` | Header tidak terkirim. Fungsi `api` sudah menambahkannya, perintah `curl` manual harus menyertakan `-H "Idempotency-Key: $(U)"` |
 | 415 atau 413 pada unggah | Format bukan JPEG, PNG, atau WebP, atau berkas lebih dari 5 MB |
 | 502 `upstream-error` pada verifikasi | Gemini tidak menjawab atau kuota habis. Status struk tidak berubah, ulangi beberapa saat lagi. Bila terus terjadi, ganti `GEMINI_MODEL` (lihat `SETUP.md`) |
@@ -186,3 +207,9 @@ Pemilih adalah anggota aktif selain pengaju. Dengan tiga anggota dan satu admin,
 ## Bila Gemini atau jaringan tidak tersedia
 
 Verifikasi struk bergantung pada layanan luar, dan demo end-to-end tidak punya jalur pengganti tanpa itu. Sebagai bukti alternatif, seluruh alur di atas (termasuk pelunasan serentak dan penolakan nominal berlebih) diuji otomatis di SQL Server asli oleh `npm run test:integration` di `apps/backend` (134 tes), dan hasil CI per commit dapat dilihat di tab Actions repository.
+
+## Hasil latihan
+
+Panduan ini dijalankan penuh sekali di mesin pengembang pada 26 sampai 27 November 2026 (Windows 11, Git Bash, SQL Server dan Azurite di Docker, Gemini asli). Yang terbukti pada latihan itu: pendaftaran tiga pengguna, grup dan gabung, metode pembayaran terenkripsi (B ditolak melihatnya), verifikasi struk oleh AI (foto blur terbaca Rp50.000 dengan keyakinan 0,85 sehingga nominal Rp100.000 ditolak `total-mismatch`), jalur persetujuan (kuorum 1 dari 2 pemilih, pengaju tidak boleh memilih sendiri), pembagian Rp33.334, Rp33.333, Rp33.333, pelunasan tunai, pelunasan transfer berbukti (bukti 4.375 byte kembali identik, pihak ketiga mendapat 404), seluruh saldo nol, dan penolakan pelunasan berlebih.
+
+Yang belum terlatih: jalur `VERIFIED` langsung (struk yang totalnya cocok dengan nominal), karena foto yang dipakai tidak terbaca jelas, serta semua yang bergantung pada Azure (belum ada sumber daya).
