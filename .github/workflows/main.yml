@@ -11,40 +11,100 @@ permissions:
 
 jobs:
   backend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: apps/backend
+
+    # SQL Server khusus CI: sementara, baru di setiap eksekusi, dan tidak terjangkau dari luar.
+    # Kata sandi di bawah hanya untuk container ini dan berbeda dari kata sandi pengembangan.
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_PID: Developer
+          MSSQL_SA_PASSWORD: Ci0nly_Passw0rd_2026
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P Ci0nly_Passw0rd_2026 -Q 'SELECT 1'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+          --health-start-period 20s
+
+    env:
+      DB_SERVER: localhost
+      DB_PORT: "1433"
+      DB_NAME: patunganku_ci
+      DB_USER: sa
+      DB_PASSWORD: Ci0nly_Passw0rd_2026
+      DATABASE_URL: "sqlserver://localhost:1433;database=patunganku_ci;user=sa;password=Ci0nly_Passw0rd_2026;trustServerCertificate=true"
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24.x
 
       - name: Install Dependencies
-        run: |
-          if [ -f apps/backend/package.json ]; then
-            cd apps/backend
-            npm ci || npm install
-          else
-            echo "apps/backend belum ada, melewati instalasi."
-          fi
+        run: npm ci
 
-      - name: Lint
-        run: |
-          if [ -f apps/backend/package.json ]; then
-            cd apps/backend
-            npm run lint --if-present
-          else
-            echo "Backend belum ada, melewati lint."
-          fi
+      - name: Cek sintaks
+        run: npm run check
 
-      - name: Test
-        run: |
-          if [ -f apps/backend/package.json ]; then
-            cd apps/backend
-            npm test --if-present
-          else
-            echo "Backend belum ada, melewati test."
-          fi
+      - name: Tes unit
+        run: npm test
+
+      - name: Buat database CI
+        run: >-
+          docker exec ${{ job.services.sqlserver.id }}
+          /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$DB_PASSWORD" -b
+          -Q "CREATE DATABASE patunganku_ci"
+
+      - name: Terapkan migration dari nol
+        run: npx prisma migrate reset --force
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
+      - name: Pastikan skema sinkron dengan database
+        run: npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
+
+      - name: Tes integrasi
+        run: npm run test:integration
+
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        working-directory: apps/frontend
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+
+      - name: Pasang pnpm
+        run: npm install -g pnpm@10.34.9
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Build
+        run: pnpm run build

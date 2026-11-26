@@ -1,0 +1,42 @@
+# Produksi di satu VM: backend + Caddy (HTTPS otomatis). Database (Azure SQL) dan blob
+# (Azure Storage) ada di luar compose dan diatur lewat apps/backend/.env.
+# Dari root repo:
+#   docker compose -f infra/docker-compose.prod.yml up -d --build
+#   docker compose -f infra/docker-compose.prod.yml run --rm backend npx prisma migrate deploy
+# SITE_ADDRESS = nama domain VM (HTTPS otomatis); bawaan ":80" hanya HTTP untuk uji lokal.
+name: patunganku-prod
+
+services:
+  backend:
+    build:
+      context: ../apps/backend
+    image: patunganku-backend:latest
+    env_file:
+      - ../apps/backend/.env
+    environment:
+      PORT: "4000"
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    expose:
+      - "4000"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  caddy-data:
+  caddy-config:
